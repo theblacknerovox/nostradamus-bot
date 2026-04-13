@@ -8,3 +8,4 @@ tenacity==8.2.3
 python-dotenv==1.0.0
 pyjwt==2.8.0
 bcrypt==4.1.0
+python-multipart==0.0.6
