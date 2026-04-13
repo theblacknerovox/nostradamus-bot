@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   nostradamus:
     build: .
@@ -10,6 +9,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./static:/app/static
     restart: unless-stopped
     logging:
       driver: "json-file"
