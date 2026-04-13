@@ -20,7 +20,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException, BinanceOrderException, BinanceOrderMinAmountException
 
@@ -117,6 +118,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static files (dashboard)
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 security = HTTPBearer()
 
@@ -1331,6 +1337,13 @@ async def verify_token(request: Request):
 # ==================== API ENDPOINTS ====================
 @app.get("/")
 async def root():
+    dashboard_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if os.path.exists(dashboard_path):
+        return FileResponse(dashboard_path)
+    return {"status": "online", "version": "3.2.0", "name": "Nostradamus Trading Bot", "timestamp": datetime.now().isoformat()}
+
+@app.get("/api/info")
+async def api_info():
     return {"status": "online", "version": "3.2.0", "name": "Nostradamus Trading Bot - Versão Híbrida", "timestamp": datetime.now().isoformat()}
 
 @app.get("/api/status")
@@ -1451,6 +1464,13 @@ async def shutdown_event():
 @app.get("/teste")
 async def teste():
     return {"status": "ok", "message": "Servidor funcionando"}
+
+@app.get("/login")
+async def login_page():
+    path = os.path.join(os.path.dirname(__file__), "static", "login.html")
+    if os.path.exists(path):
+        return FileResponse(path)
+    return HTMLResponse("<h1>Login page not found</h1>", status_code=404)
     
 if __name__ == "__main__":
     import uvicorn
