@@ -151,9 +151,17 @@ public_rate_limiter = RateLimiter(max_calls=30, period=1)
 # ==================== BINANCE CLIENT ====================
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
 
 validate_config()
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+
+client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY, testnet=BINANCE_TESTNET)
+
+if BINANCE_TESTNET:
+    client.FUTURES_URL = "https://testnet.binancefuture.com/fapi"
+    log("🧪 MODO TESTNET ATIVADO — usando dinheiro fictício", level='warning')
+else:
+    log("💰 MODO PRODUÇÃO — usando conta real", level='info')
 
 # ==================== DATABASE ====================
 DB_DIR = os.getenv("DB_PATH", "/app/data")
@@ -1340,7 +1348,7 @@ async def root():
     dashboard_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     if os.path.exists(dashboard_path):
         return FileResponse(dashboard_path)
-    return {"status": "online", "version": "3.2.0", "name": "Nostradamus Trading Bot", "timestamp": datetime.now().isoformat()}
+    return {"status": "online", "version": "3.2.0", "name": "Nostradamus Trading Bot", "testnet": BINANCE_TESTNET, "timestamp": datetime.now().isoformat()}
 
 @app.get("/api/info")
 async def api_info():
@@ -1379,7 +1387,7 @@ async def get_status():
         "uptime_hours": 0, "sharpe_ratio": 0.0
     }
     return {
-        "running": bot_on, "positions": pos_list, "daily_loss": round(daily_loss, 2),
+        "running": bot_on, "testnet": BINANCE_TESTNET, "positions": pos_list, "daily_loss": round(daily_loss, 2),
         "daily_loss_limit": DAILY_LOSS_LIMIT,
         "daily_loss_percentage": round((daily_loss / bal) * 100, 2) if bal > 0 else 0,
         "current_balance": round(bal, 2), "start_balance": round(start_balance, 2),
