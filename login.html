@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nostradamus — Acesso</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#070a0f;--bg2:#0d1117;--bg3:#111820;
+  --green:#00c878;--green-dim:rgba(0,200,120,.08);--green-glow:rgba(0,200,120,.2);
+  --red:#ff4757;--text:#e0e8f0;--muted:#4a5a6a;--border:rgba(0,200,120,.12);--border2:rgba(0,200,120,.28);
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Space Mono',monospace}
+
+/* grid background */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:linear-gradient(rgba(0,200,120,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,200,120,.03) 1px,transparent 1px);
+  background-size:40px 40px;pointer-events:none;z-index:0;
+}
+
+.wrap{
+  position:relative;z-index:1;
+  min-height:100vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px;
+}
+
+.card{
+  background:var(--bg2);border:1px solid var(--border2);
+  border-radius:12px;padding:48px 44px;width:100%;max-width:420px;
+  box-shadow:0 0 60px rgba(0,200,120,.05);
+  animation:fadeUp .5s ease both;
+}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+.logo{
+  display:flex;align-items:center;gap:12px;margin-bottom:36px;
+}
+.logo-icon{
+  width:40px;height:40px;border:1.5px solid var(--green);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden;
+}
+.logo-icon::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(0,200,120,.15),transparent);
+}
+.logo-icon svg{position:relative;z-index:1}
+.logo-text{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:var(--green);letter-spacing:-0.5px}
+.logo-ver{font-size:10px;color:var(--muted);margin-top:1px}
+
+h1{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;margin-bottom:6px}
+.subtitle{font-size:12px;color:var(--muted);margin-bottom:32px}
+
+.field{margin-bottom:20px}
+.field label{display:block;font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.field input{
+  width:100%;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text);font-family:'Space Mono',monospace;font-size:14px;
+  padding:12px 16px;border-radius:6px;outline:none;
+  transition:border .2s,box-shadow .2s;
+}
+.field input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(0,200,120,.08)}
+.field input::placeholder{color:var(--muted)}
+
+.btn-login{
+  width:100%;padding:14px;
+  background:var(--green);color:#040608;
+  font-family:'Space Mono',monospace;font-size:14px;font-weight:700;
+  letter-spacing:1px;border:none;border-radius:6px;cursor:pointer;
+  transition:all .15s;margin-top:4px;
+}
+.btn-login:hover{background:#00e589;transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,200,120,.3)}
+.btn-login:active{transform:translateY(0)}
+.btn-login:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+.error{
+  background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.25);
+  color:var(--red);border-radius:6px;padding:12px 16px;
+  font-size:12px;margin-bottom:16px;display:none;
+}
+.error.show{display:block}
+
+.spinner{display:inline-block;animation:spin .8s linear infinite;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.footer{margin-top:32px;text-align:center;font-size:11px;color:var(--muted)}
+
+/* scanning line animation */
+.card::after{
+  content:'';position:absolute;
+  left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--green),transparent);
+  animation:scan 3s ease-in-out infinite;pointer-events:none;border-radius:12px;
+}
+.card{position:relative;overflow:hidden}
+@keyframes scan{0%{top:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{top:100%;opacity:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M10 2L17 6V14L10 18L3 14V6L10 2Z" stroke="#00c878" stroke-width="1.5" fill="none"/>
+          <circle cx="10" cy="10" r="2.5" fill="#00c878"/>
+        </svg>
+      </div>
+      <div>
+        <div class="logo-text">NOSTRADAMUS</div>
+        <div class="logo-ver">Trading Bot v3.2.0</div>
+      </div>
+    </div>
+
+    <h1>Acesso ao painel</h1>
+    <div class="subtitle">Entre com sua senha para continuar</div>
+
+    <div class="error" id="error-msg"></div>
+
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+
+    <button class="btn-login" id="btn-login" onclick="doLogin()">ENTRAR</button>
+
+    <div class="footer">Nostradamus © 2026 — Acesso restrito</div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+
+  async function doLogin() {
+    const pw = document.getElementById('password').value;
+    const btn = document.getElementById('btn-login');
+    const err = document.getElementById('error-msg');
+
+    if (!pw) { showError('Digite sua senha.'); return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner">⟳</span> Verificando...';
+    err.classList.remove('show');
+
+    try {
+      const r = await fetch('/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({password: pw})
+      });
+      const d = await r.json();
+      if (r.ok && d.token) {
+        localStorage.setItem('nst_token', d.token);
+        window.location.href = '/';
+      } else {
+        showError('Senha incorreta. Tente novamente.');
+      }
+    } catch(e) {
+      showError('Erro de conexão com o bot.');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = 'ENTRAR';
+  }
+
+  function showError(msg) {
+    const err = document.getElementById('error-msg');
+    err.textContent = msg;
+    err.classList.add('show');
+  }
+
+  // If already logged in, go to dashboard
+  const token = localStorage.getItem('nst_token');
+  if (token) {
+    fetch('/auth/verify', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({token})
+    }).then(r => r.json()).then(d => {
+      if (d.valid) window.location.href = '/';
+    }).catch(() => {});
+  }
+</script>
+</body>
+</html>
