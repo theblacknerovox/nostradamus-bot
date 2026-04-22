@@ -1,5 +1,5 @@
 """
-NOSTRADAMUS TRADING BOT v4.0
+NOSTRADAMUS TRADING BOT v4.1
 Versão com Inteligência Artificial, Ichimoku, VWAP, Fibonacci,
 Partial Take Profit e Pyramid Position
 """
@@ -59,10 +59,10 @@ def validate_config():
     MAX_PRICE=float(os.getenv("MAX_PRICE","20")); AI_MIN_CONFIDENCE=float(os.getenv("AI_MIN_CONFIDENCE","52"))
     PARTIAL_TP_ENABLED=os.getenv("PARTIAL_TP","true").lower()=="true"
     PYRAMID_ENABLED=os.getenv("PYRAMID","true").lower()=="true"
-    log("Configuração v4.0 validada com sucesso", level='success')
+    log("Configuração v4.1 validada com sucesso", level='success')
 
 # ==================== APP ====================
-app = FastAPI(title="Nostradamus v4.0", version="4.0.0")
+app = FastAPI(title="Nostradamus v4.1", version="4.1.0")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
@@ -133,7 +133,7 @@ def init_db():
             symbol TEXT, features TEXT, outcome INTEGER, pnl REAL, created_at TEXT
         );
         """)
-        log("Banco v4.0 inicializado", level='success')
+        log("Banco v4.1 inicializado", level='success')
 
 init_db()
 
@@ -202,8 +202,12 @@ def load_filters():
     global symbol_filters
     try:
         info=safe_req(client.futures_exchange_info)
+        loaded=0
         for s in info["symbols"]:
             if not s["symbol"].endswith("USDT"): continue
+            # Só inclui pares ativos para trading
+            if s.get("status","") != "TRADING": continue
+            if s.get("contractType","") not in ("PERPETUAL","","LINEAR"): continue
             sf={f["filterType"]:f for f in s["filters"]}
             if "LOT_SIZE" not in sf or "PRICE_FILTER" not in sf: continue
             ls=sf["LOT_SIZE"]; pf=sf["PRICE_FILTER"]; mn=sf.get("MIN_NOTIONAL",{})
@@ -213,6 +217,8 @@ def load_filters():
                 "min_price":float(pf.get("minPrice",0)),"max_price":float(pf.get("maxPrice",1e9)),
                 "min_notional":float(mn.get("notional",5)) if mn else 5
             }
+            loaded+=1
+        log(f"{loaded} pares USDT disponíveis para trading",level='success')
     except Exception as e: log(f"Erro filtros: {e}",level='error')
 
 load_filters()
@@ -251,7 +257,7 @@ def get_candles(symbol,tf,limit=200):
         return df
     except: return pd.DataFrame()
 
-# ==================== INDICADORES v4.0 ====================
+# ==================== INDICADORES v4.1 ====================
 def calc_ema(series,span): return series.ewm(span=span,adjust=False).mean()
 
 def calc_rsi(df,period=14):
@@ -374,7 +380,7 @@ def support_resistance(df):
         if c["t"]>=2: levels.append({"price":c["price"],"type":"support" if c["price"]<price else "resistance","strength":min(100,c["t"]*25)})
     return sorted(levels,key=lambda x: x["strength"],reverse=True)[:8]
 
-# ==================== AI ENGINE v4.0 ====================
+# ==================== AI ENGINE v4.1 ====================
 MODEL_FILE=os.path.join(DB_DIR,"ai_model_v4.pkl")
 
 class AIEngine:
@@ -445,7 +451,7 @@ class AIEngine:
 
 ai_engine=AIEngine()
 
-# ==================== STRATEGY v4.0 ====================
+# ==================== STRATEGY v4.1 ====================
 def compute_score_v4(df):
     if len(df)<60: return {"score":0,"direction":"SIDE","signals":{}}
     price=df["c"].iloc[-1]
@@ -505,9 +511,43 @@ def compute_score_v4(df):
     if price>e50 and price<bb_u.iloc[-1]: buy+=8;sigs["bb"]="bull"
     elif price<e50 and price>bb_l.iloc[-1]: sell+=8;sigs["bb"]="bear"
 
-    if buy>sell and bs>=4: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
-    if sell>buy and ss>=4: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    if buy>sell and bs>=3: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    if sell>buy and ss>=3: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
     return {"score":0,"direction":"SIDE","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+
+def hybrid_entry_signal(df):
+    """Estratégia híbrida equilibrada — bom para testnet e conta pequena"""
+    if len(df)<60: return None
+    sd = compute_score_v4(df)
+    if sd["direction"]=="SIDE": return None
+
+    # Score mínimo reduzido para mais entradas
+    min_score = 35
+    min_signals = 3
+
+    # Filtro obrigatório: anti-fake (mais importante)
+    if not anti_fake_breakout(df):
+        log(f"❌ Anti-fake rejeitou",level='debug'); return None
+
+    # Filtro obrigatório: mercado lateral
+    if is_lateral(df):
+        log(f"❌ Mercado lateral",level='debug'); return None
+
+    # Bônus por candle forte (+5)
+    bonus = 5 if strong_candle(df) else 0
+    # Bônus por volume (+5)
+    bonus += 5 if volume_ok(df) else 0
+
+    final_score = sd["score"] + bonus
+    buy_sig = sd.get("buy_sig", 0)
+    sell_sig = sd.get("sell_sig", 0)
+    signals_ok = (buy_sig >= min_signals if sd["direction"]=="UP" else sell_sig >= min_signals)
+
+    if final_score < min_score or not signals_ok:
+        log(f"❌ Score insuficiente: {final_score} / sinais: {buy_sig}B {sell_sig}S",level='debug')
+        return None
+
+    return {"signal":sd["direction"],"score":final_score,"justification":f"Score:{final_score} Sinais:{buy_sig}B/{sell_sig}S","signals":sd.get("signals",{})}
 
 def anti_fake_breakout(df):
     if len(df)<3: return False
@@ -528,7 +568,7 @@ def strong_candle(df):
     last=df.iloc[-1]; body=abs(last["c"]-last["o"]); rng=last["h"]-last["l"]
     return rng>0 and body>=rng*0.4
 
-# ==================== RISK MANAGER v4.0 ====================
+# ==================== RISK MANAGER v4.1 ====================
 class RiskManagerV4:
     def __init__(self): self.peak_balance=0; self.initial_balance=0
 
@@ -570,7 +610,7 @@ def sync_positions():
                     positions[p["symbol"]]={"side":"UP" if amt>0 else "DOWN","entry":float(p["entryPrice"]),"qty":abs(amt),"entry_time":datetime.now().isoformat(),"partial_tp_done":0,"pyramid_count":0}
     except Exception as e: log(f"Erro sync: {e}",level='error')
 
-# ==================== EXECUTION v4.0 ====================
+# ==================== EXECUTION v4.1 ====================
 def execute_trade(symbol,side,score_data,ai_conf):
     global positions,daily_loss
     with lock:
@@ -613,7 +653,7 @@ def execute_trade(symbol,side,score_data,ai_conf):
             features=ai_engine.extract_features(df)
             if features: save_ai_data(symbol,features,None,0)
             sigs=", ".join([f"{k}:{v}" for k,v in score_data.get("signals",{}).items()])
-            log(f"✅ TRADE v4.0: {symbol} {side} | Score:{score_data.get('score',0)} | IA:{ai_conf:.0f}% | Risk:{dynamic_risk*100:.1f}% | {sigs}",level='trade')
+            log(f"✅ TRADE v4.1: {symbol} {side} | Score:{score_data.get('score',0)} | IA:{ai_conf:.0f}% | Risk:{dynamic_risk*100:.1f}% | {sigs}",level='trade')
         except Exception as e: log(f"Erro execução {symbol}: {e}",level='error')
 
 def manage_positions():
@@ -710,10 +750,10 @@ def find_candidates():
         return [c[0] for c in candidates[:10]]
     except Exception as e: log(f"Erro scanner: {e}",level='error'); return []
 
-# ==================== BOT LOOP v4.0 ====================
+# ==================== BOT LOOP v4.1 ====================
 def bot_loop():
     global bot_on,daily_loss,positions,start_balance
-    log("🚀 Nostradamus v4.0 iniciado! Ichimoku+VWAP+Fibonacci+IA",level='success')
+    log("🚀 Nostradamus v4.1 iniciado! Ichimoku+VWAP+Fibonacci+IA",level='success')
     sync_positions(); start_balance=get_balance(); save_state("start_balance",start_balance)
     risk_manager.initial_balance=start_balance; risk_manager.peak_balance=start_balance
     last_sync=time.time(); last_train=time.time(); loop_count=0
@@ -731,12 +771,9 @@ def bot_loop():
                         if sym in positions: continue
                         df=get_candles(sym,"5m")
                         if df.empty or len(df)<60: continue
-                        sd=compute_score_v4(df)
-                        if sd["direction"]=="SIDE" or sd["score"]<50: continue
-                        if is_lateral(df): log(f"❌ Lateral: {sym}",level='debug'); continue
-                        if not anti_fake_breakout(df): log(f"❌ AntiFake: {sym}",level='debug'); continue
-                        if not strong_candle(df): log(f"❌ Candle: {sym}",level='debug'); continue
-                        if not volume_ok(df): log(f"❌ Volume: {sym}",level='debug'); continue
+                        signal=hybrid_entry_signal(df)
+                        if not signal: continue
+                        sd={"score":signal["score"],"direction":signal["signal"],"signals":signal.get("signals",{})}
                         features=ai_engine.extract_features(df)
                         ai_conf=50.0; ai_dir="uncertain"
                         if features and ai_engine.trained:
@@ -746,7 +783,7 @@ def bot_loop():
                             if ai_dir!=tech_dir and ai_conf>65: log(f"🧠 IA discorda: {sym}",level='ai'); continue
                         elif features: ai_conf=55.0
                         if ai_conf<AI_MIN_CONFIDENCE and ai_engine.trained: log(f"🧠 IA baixa: {sym} {ai_conf:.0f}%",level='ai'); continue
-                        log(f"💰 SINAL v4.0: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%",level='trade')
+                        log(f"💰 SINAL v4.1: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%",level='trade')
                         execute_trade(sym,sd["direction"],sd,ai_conf); 
                         if sym in positions: break
             manage_positions(); save_state("daily_loss",daily_loss)
@@ -776,10 +813,21 @@ class Auth:
 bot_on=load_state("bot_on",False); positions=load_positions()
 daily_loss=load_state("daily_loss",0.0); start_balance=load_state("start_balance",0.0)
 
+def scanner_loop():
+    """Scanner independente — roda sempre, mesmo com bot parado"""
+    log("Scanner background iniciado",level='info')
+    while True:
+        try:
+            find_candidates()
+        except Exception as e:
+            log(f"Erro scanner: {e}",level='error')
+        time.sleep(60)
+
 @app.on_event("startup")
 async def on_startup():
-    log("Nostradamus v4.0 — Sistema online",level='success')
+    log("Nostradamus v4.1 — Sistema online",level='success')
     threading.Thread(target=ai_engine.train,daemon=True).start()
+    threading.Thread(target=scanner_loop,daemon=True).start()
     if bot_on: threading.Thread(target=bot_loop,daemon=True).start()
     else: log("Bot aguardando comando",level='info')
 
@@ -790,7 +838,7 @@ async def on_shutdown():
 # ==================== ROUTES ====================
 @app.get("/")
 async def root():
-    p=os.path.join(static_dir,"index.html"); return FileResponse(p) if os.path.exists(p) else {"version":"4.0.0"}
+    p=os.path.join(static_dir,"index.html"); return FileResponse(p) if os.path.exists(p) else {"version":"4.1.0"}
 
 @app.get("/login")
 async def login_page():
@@ -902,7 +950,7 @@ async def metrics():
             "profit_factor":round(g/abs(l),2) if l else 0,"total_pnl":round(p,2)}
 
 @app.get("/teste")
-async def teste(): return {"status":"ok","version":"4.0.0"}
+async def teste(): return {"status":"ok","version":"4.1.0"}
 
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
