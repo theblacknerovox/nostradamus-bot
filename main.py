@@ -86,12 +86,21 @@ binance_rl = RateLimiter(10,1)
 # ==================== BINANCE ====================
 BINANCE_API_KEY=os.getenv("BINANCE_API_KEY"); BINANCE_SECRET_KEY=os.getenv("BINANCE_SECRET_KEY")
 BINANCE_TESTNET=os.getenv("BINANCE_TESTNET","false").lower()=="true"
+BINANCE_DEMO=os.getenv("BINANCE_DEMO","false").lower()=="true"
 validate_config()
-client=Client(BINANCE_API_KEY,BINANCE_SECRET_KEY,testnet=BINANCE_TESTNET)
-if BINANCE_TESTNET:
+
+# Demo Trading usa endpoint especial
+if BINANCE_DEMO:
+    client=Client(BINANCE_API_KEY,BINANCE_SECRET_KEY,testnet=True)
     client.FUTURES_URL="https://testnet.binancefuture.com/fapi"
-    log("🧪 MODO TESTNET ATIVADO — usando dinheiro fictício", level='warning')
+    client.API_URL="https://testnet.binance.vision/api"
+    log("🎮 MODO DEMO TRADING ATIVADO — dinheiro fictício", level='warning')
+elif BINANCE_TESTNET:
+    client=Client(BINANCE_API_KEY,BINANCE_SECRET_KEY,testnet=True)
+    client.FUTURES_URL="https://testnet.binancefuture.com/fapi"
+    log("🧪 MODO TESTNET ATIVADO — dinheiro fictício", level='warning')
 else:
+    client=Client(BINANCE_API_KEY,BINANCE_SECRET_KEY)
     log("💰 MODO PRODUÇÃO — conta real", level='info')
 
 # ==================== DATABASE ====================
@@ -883,7 +892,7 @@ async def status():
         ai_s=conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
     wr=(w/t*100) if t>0 else 0; pf=tg/abs(tl) if tl!=0 else 0
     return {
-        "running":bot_on,"testnet":BINANCE_TESTNET,"positions":pos_list,
+        "running":bot_on,"testnet":BINANCE_TESTNET or BINANCE_DEMO,"demo":BINANCE_DEMO,"positions":pos_list,
         "daily_loss":round(daily_loss,2),"daily_loss_limit":DAILY_LOSS_LIMIT,
         "daily_loss_percentage":round((daily_loss/bal)*100,2) if bal>0 else 0,
         "current_balance":round(bal,2),"start_balance":round(start_balance,2),
