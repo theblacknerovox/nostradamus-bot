@@ -623,25 +623,28 @@ def sync_positions():
 def execute_trade(symbol,side,score_data,ai_conf):
     global positions,daily_loss
     log(f"🔄 Tentando executar: {symbol} {side} | IA:{ai_conf:.0f}%",level='trade')
-    with lock:
-        if symbol in positions:
-            log(f"⚠️ {symbol} já em posição",level='warning'); return
-        try:
-            bal=get_balance()
-            log(f"💵 Saldo: ${bal:.2f}",level='trade')
-            if bal<=0: log(f"❌ Saldo zero",level='reject'); return
-            if PROTECT_CAPITAL:
-                min_cap=symbol_filters.get(symbol,{}).get("min_notional",10)*2
-                if bal<min_cap: log(f"❌ Capital insuficiente {symbol}: ${bal:.2f} < ${min_cap:.2f}",level='reject'); return
-            price=get_price(symbol)
-            log(f"💲 Preço {symbol}: ${price}",level='trade')
-            if not price: log(f"❌ Sem preço para {symbol}",level='reject'); return
-            df=get_candles(symbol,"5m")
-            if df.empty: log(f"❌ Sem candles para {symbol}",level='reject'); return
-            atr_v=calc_atr(df).iloc[-1] if not calc_atr(df).empty else 0
-            vol=atr_v/price if price>0 else 0
-            log(f"📊 ATR:{atr_v:.6f} Vol:{vol:.6f}",level='trade')
-            if vol<0.0003: log(f"❌ Volatilidade baixa {symbol}: {vol:.6f}",level='reject'); return
+    # Verifica posição sem lock pesado
+    if symbol in positions:
+        log(f"⚠️ {symbol} já em posição",level='warning'); return
+    try:
+        # Coleta dados FORA do lock para não bloquear
+        bal=get_balance()
+        log(f"💵 Saldo: ${bal:.2f}",level='trade')
+        if bal<=0: log(f"❌ Saldo zero",level='reject'); return
+        if PROTECT_CAPITAL:
+            min_cap=symbol_filters.get(symbol,{}).get("min_notional",10)*2
+            if bal<min_cap: log(f"❌ Capital insuficiente {symbol}: ${bal:.2f} < ${min_cap:.2f}",level='reject'); return
+        price=get_price(symbol)
+        log(f"💲 Preço {symbol}: ${price}",level='trade')
+        if not price: log(f"❌ Sem preço para {symbol}",level='reject'); return
+        df=get_candles(symbol,"5m")
+        if df.empty: log(f"❌ Sem candles para {symbol}",level='reject'); return
+        atr_v=calc_atr(df).iloc[-1] if not calc_atr(df).empty else 0
+        vol=atr_v/price if price>0 else 0
+        log(f"📊 ATR:{atr_v:.6f} Vol:{vol:.6f}",level='trade')
+        if vol<0.0003: log(f"❌ Volatilidade baixa {symbol}: {vol:.6f}",level='reject'); return
+        with lock:
+            if symbol in positions: return  # double check
             dynamic_risk=risk_manager.get_risk(bal,ai_conf)
             if side=="UP":
                 sl=adj_price(symbol,price-atr_v*1.2); tp=adj_price(symbol,price+atr_v*RR)
@@ -670,7 +673,7 @@ def execute_trade(symbol,side,score_data,ai_conf):
             if features: save_ai_data(symbol,features,None,0)
             sigs=", ".join([f"{k}:{v}" for k,v in score_data.get("signals",{}).items()])
             log(f"✅ TRADE v4.1: {symbol} {side} | Score:{score_data.get('score',0)} | IA:{ai_conf:.0f}% | Risk:{dynamic_risk*100:.1f}% | {sigs}",level='trade')
-        except Exception as e: log(f"Erro execução {symbol}: {e}",level='error')
+    except Exception as e: log(f"Erro execução {symbol}: {e}",level='error')
 
 def manage_positions():
     global positions,daily_loss
