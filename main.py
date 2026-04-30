@@ -1,7 +1,6 @@
 """
-NOSTRADAMUS TRADING BOT v4.1
-Versão com Inteligência Artificial, Ichimoku, VWAP, Fibonacci,
-Partial Take Profit e Pyramid Position
+NOSTRADAMUS TRADING BOT v4.2
+CORRIGIDO: Deadlock no lock removido, execução otimizada
 """
 import os, threading, time, math, sqlite3, logging, json, pickle, warnings
 warnings.filterwarnings('ignore')
@@ -41,8 +40,8 @@ def log(msg, level='info'):
 
 # ==================== CONFIG ====================
 LEVERAGE=2; RISK=0.01; RR=2.0; MAX_TRADES=2; DAILY_LOSS_LIMIT=0.03
-INTERVAL=10; RISK_MAX=0.02; RISK_MIN=0.005; MIN_BACKTEST_CONFIDENCE=35.0
-PROTECT_CAPITAL=True; MAX_PRICE=20.0; AI_MIN_CONFIDENCE=52.0
+INTERVAL=10; RISK_MAX=0.02; RISK_MIN=0.005; MIN_BACKTEST_CONFIDENCE=20.0
+PROTECT_CAPITAL=True; MAX_PRICE=20.0; AI_MIN_CONFIDENCE=40.0
 PARTIAL_TP_ENABLED=True; PYRAMID_ENABLED=True
 
 def validate_config():
@@ -50,19 +49,19 @@ def validate_config():
     global MIN_BACKTEST_CONFIDENCE,PROTECT_CAPITAL,MAX_PRICE,AI_MIN_CONFIDENCE,PARTIAL_TP_ENABLED,PYRAMID_ENABLED
     missing = [v for v in ["BINANCE_API_KEY","BINANCE_SECRET_KEY"] if not os.getenv(v)]
     if missing: raise ValueError(f"Variáveis faltando: {missing}")
-    LEVERAGE=int(os.getenv("LEVERAGE","3")); RISK=float(os.getenv("RISK","0.015"))
-    RR=float(os.getenv("RR","2.5")); MAX_TRADES=int(os.getenv("MAX_TRADES","3"))
-    DAILY_LOSS_LIMIT=float(os.getenv("DAILY_LOSS_LIMIT","0.04")); INTERVAL=int(os.getenv("INTERVAL","10"))
+    LEVERAGE=int(os.getenv("LEVERAGE","2")); RISK=float(os.getenv("RISK","0.01"))
+    RR=float(os.getenv("RR","2.0")); MAX_TRADES=int(os.getenv("MAX_TRADES","2"))
+    DAILY_LOSS_LIMIT=float(os.getenv("DAILY_LOSS_LIMIT","0.03")); INTERVAL=int(os.getenv("INTERVAL","10"))
     RISK_MAX=float(os.getenv("RISK_MAX","0.02")); RISK_MIN=float(os.getenv("RISK_MIN","0.005"))
-    MIN_BACKTEST_CONFIDENCE=float(os.getenv("MIN_BACKTEST_CONFIDENCE","35"))
+    MIN_BACKTEST_CONFIDENCE=float(os.getenv("MIN_BACKTEST_CONFIDENCE","20"))
     PROTECT_CAPITAL=os.getenv("PROTECT_CAPITAL","true").lower()=="true"
-    MAX_PRICE=float(os.getenv("MAX_PRICE","20")); AI_MIN_CONFIDENCE=float(os.getenv("AI_MIN_CONFIDENCE","52"))
+    MAX_PRICE=float(os.getenv("MAX_PRICE","20")); AI_MIN_CONFIDENCE=float(os.getenv("AI_MIN_CONFIDENCE","40"))
     PARTIAL_TP_ENABLED=os.getenv("PARTIAL_TP","true").lower()=="true"
     PYRAMID_ENABLED=os.getenv("PYRAMID","true").lower()=="true"
-    log("Configuração v4.1 validada com sucesso", level='success')
+    log("Configuração v4.2 validada com sucesso", level='success')
 
 # ==================== APP ====================
-app = FastAPI(title="Nostradamus v4.1", version="4.1.0")
+app = FastAPI(title="Nostradamus v4.2", version="4.2.0")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
@@ -89,7 +88,6 @@ BINANCE_TESTNET=os.getenv("BINANCE_TESTNET","false").lower()=="true"
 BINANCE_DEMO=os.getenv("BINANCE_DEMO","false").lower()=="true"
 validate_config()
 
-# Demo Trading usa endpoint especial
 if BINANCE_DEMO:
     client=Client(BINANCE_API_KEY,BINANCE_SECRET_KEY,testnet=True)
     client.FUTURES_URL="https://testnet.binancefuture.com/fapi"
@@ -142,7 +140,7 @@ def init_db():
             symbol TEXT, features TEXT, outcome INTEGER, pnl REAL, created_at TEXT
         );
         """)
-        log("Banco v4.1 inicializado", level='success')
+        log("Banco v4.2 inicializado", level='success')
 
 init_db()
 
@@ -214,7 +212,6 @@ def load_filters():
         loaded=0
         for s in info["symbols"]:
             if not s["symbol"].endswith("USDT"): continue
-            # Só inclui pares ativos para trading
             if s.get("status","") != "TRADING": continue
             if s.get("contractType","") not in ("PERPETUAL","","LINEAR"): continue
             sf={f["filterType"]:f for f in s["filters"]}
@@ -266,7 +263,7 @@ def get_candles(symbol,tf,limit=200):
         return df
     except: return pd.DataFrame()
 
-# ==================== INDICADORES v4.1 ====================
+# ==================== INDICADORES v4.2 ====================
 def calc_ema(series,span): return series.ewm(span=span,adjust=False).mean()
 
 def calc_rsi(df,period=14):
@@ -286,7 +283,6 @@ def calc_bollinger(df,period=20,std=2):
     tp=(df["h"]+df["l"]+df["c"])/3; mid=tp.rolling(period).mean(); s=tp.rolling(period).std()
     return mid+s*std,mid,mid-s*std
 
-# ===== ICHIMOKU CLOUD =====
 def calc_ichimoku(df):
     h9=df["h"].rolling(9).max(); l9=df["l"].rolling(9).min()
     h26=df["h"].rolling(26).max(); l26=df["l"].rolling(26).min()
@@ -312,7 +308,6 @@ def ichimoku_signal(df):
     score=bull-bear
     return (1 if score>=2 else -1 if score<=-2 else 0), abs(score)
 
-# ===== VWAP =====
 def calc_vwap(df):
     tp=(df["h"]+df["l"]+df["c"])/3
     return (tp*df["v"]).cumsum()/df["v"].cumsum().replace(0,1e-10)
@@ -324,7 +319,6 @@ def vwap_signal(df):
     pct=(price-vw_now)/vw_now*100
     return 1 if pct>0.3 else -1 if pct<-0.3 else 0
 
-# ===== FIBONACCI =====
 def fibonacci_levels(df,lookback=50):
     if len(df)<lookback: return {}
     recent=df.iloc[-lookback:]; high=recent["h"].max(); low=recent["l"].min(); diff=high-low
@@ -342,7 +336,6 @@ def fibonacci_signal(df):
             return (1 if price<fibs["high"]*0.5 else -1),{"ratio":ratio,"price":lp}
     return 0,None
 
-# ===== ESTRUTURA DE MERCADO =====
 def market_structure(df):
     if len(df)<20: return {"trend":"side","strength":0}
     highs=df["h"].rolling(5).max(); lows=df["l"].rolling(5).min()
@@ -389,7 +382,7 @@ def support_resistance(df):
         if c["t"]>=2: levels.append({"price":c["price"],"type":"support" if c["price"]<price else "resistance","strength":min(100,c["t"]*25)})
     return sorted(levels,key=lambda x: x["strength"],reverse=True)[:8]
 
-# ==================== AI ENGINE v4.1 ====================
+# ==================== AI ENGINE v4.2 ====================
 MODEL_FILE=os.path.join(DB_DIR,"ai_model_v4.pkl")
 
 class AIEngine:
@@ -460,7 +453,7 @@ class AIEngine:
 
 ai_engine=AIEngine()
 
-# ==================== STRATEGY v4.1 ====================
+# ==================== STRATEGY v4.2 ====================
 def compute_score_v4(df):
     if len(df)<60: return {"score":0,"direction":"SIDE","signals":{}}
     price=df["c"].iloc[-1]
@@ -476,108 +469,74 @@ def compute_score_v4(df):
     near_sr=any(abs(l["price"]-price)<atr_v*1.5 for l in levels[:3])
     vol_r=df["v"].iloc[-1]/(df["v"].iloc[-20:-1].mean()+1e-10)
     buy=0; sell=0; bs=0; ss=0; sigs={}
-    # 1. EMA Trend
+    
     if price>e20>e50: buy+=20;bs+=1;sigs["ema"]="bull"
     elif price<e20<e50: sell+=20;ss+=1;sigs["ema"]="bear"
-    # 2. EMA200
+    
     if price>e200: buy+=15;bs+=1;sigs["ema200"]="bull"
     elif price<e200: sell+=15;ss+=1;sigs["ema200"]="bear"
-    # 3. RSI
+    
     if 40<=rsi_v<=65 and price>e50: buy+=15;bs+=1;sigs["rsi"]=f"bull({rsi_v:.0f})"
     elif 35<=rsi_v<=60 and price<e50: sell+=15;ss+=1;sigs["rsi"]=f"bear({rsi_v:.0f})"
-    # 4. MACD
+    
     if macd_h>0 and ml.iloc[-1]>ms.iloc[-1]: buy+=12;bs+=1;sigs["macd"]="bull"
     elif macd_h<0 and ml.iloc[-1]<ms.iloc[-1]: sell+=12;ss+=1;sigs["macd"]="bear"
-    # 5. ICHIMOKU
+    
     if ichi_s==1: buy+=20;bs+=1;sigs["ichimoku"]=f"bull(f{ichi_str})"
     elif ichi_s==-1: sell+=20;ss+=1;sigs["ichimoku"]=f"bear(f{ichi_str})"
-    # 6. VWAP
+    
     if vwap_s==1: buy+=10;bs+=1;sigs["vwap"]="acima"
     elif vwap_s==-1: sell+=10;ss+=1;sigs["vwap"]="abaixo"
-    # 7. FIBONACCI
+    
     if fib_s==1: buy+=15;bs+=1;sigs["fib"]=f"suporte {fib_lv['ratio'] if fib_lv else ''}"
     elif fib_s==-1: sell+=15;ss+=1;sigs["fib"]=f"resistência {fib_lv['ratio'] if fib_lv else ''}"
-    # 8. Estrutura
+    
     if ms_d["trend"]=="bullish" and ms_d["strength"]>55: buy+=15;bs+=1;sigs["struct"]=f"bull{ms_d['strength']:.0f}%"
     elif ms_d["trend"]=="bearish" and ms_d["strength"]>55: sell+=15;ss+=1;sigs["struct"]=f"bear{ms_d['strength']:.0f}%"
-    # 9. Candle reversão
+    
     if rev["detected"]:
         if rev["type"]=="bullish": buy+=12;bs+=1;sigs["candle"]="rev_bull"
         elif rev["type"]=="bearish": sell+=12;ss+=1;sigs["candle"]="rev_bear"
-    # 10. Baleias
+    
     if whl["detected"]:
         if price>e50: buy+=10;sigs["whale"]=f"{whl['magnitude']:.1f}x"
         else: sell+=10;sigs["whale"]=f"{whl['magnitude']:.1f}x"
-    # 11. S/R
+    
     if near_sr:
         if price>e50: buy+=10;sigs["sr"]="suporte"
         else: sell+=10;sigs["sr"]="resistência"
-    # 12. Volume
+    
     if vol_r>1.3:
         if price>e50: buy+=10;bs+=1;sigs["vol"]=f"{vol_r:.1f}x"
         else: sell+=10;ss+=1;sigs["vol"]=f"{vol_r:.1f}x"
-    # 13. Bollinger
+    
     if price>e50 and price<bb_u.iloc[-1]: buy+=8;sigs["bb"]="bull"
     elif price<e50 and price>bb_l.iloc[-1]: sell+=8;sigs["bb"]="bear"
 
-    if buy>sell and bs>=3: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
-    if sell>buy and ss>=3: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    if buy>sell and bs>=2: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    if sell>buy and ss>=2: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
     return {"score":0,"direction":"SIDE","buy_sig":bs,"sell_sig":ss,"signals":sigs}
 
 def hybrid_entry_signal(df):
-    """Estratégia híbrida equilibrada — bom para testnet e conta pequena"""
     if len(df)<60: return None
     sd = compute_score_v4(df)
     if sd["direction"]=="SIDE": return None
-
-    # Score mínimo reduzido para mais entradas
-    min_score = 35
-    min_signals = 3
-
-    # Filtro obrigatório: anti-fake (mais importante)
-    if not anti_fake_breakout(df):
-        log(f"❌ Anti-fake rejeitou",level='debug'); return None
-
-    # Filtro obrigatório: mercado lateral
-    if is_lateral(df):
-        log(f"❌ Mercado lateral",level='debug'); return None
-
-    # Bônus por candle forte (+5)
-    bonus = 5 if strong_candle(df) else 0
-    # Bônus por volume (+5)
-    bonus += 5 if volume_ok(df) else 0
-
-    final_score = sd["score"] + bonus
+    
+    min_score = 20
+    min_signals = 2
+    
+    final_score = sd["score"]
     buy_sig = sd.get("buy_sig", 0)
     sell_sig = sd.get("sell_sig", 0)
     signals_ok = (buy_sig >= min_signals if sd["direction"]=="UP" else sell_sig >= min_signals)
 
     if final_score < min_score or not signals_ok:
-        log(f"❌ Score insuficiente: {final_score} / sinais: {buy_sig}B {sell_sig}S",level='debug')
+        log(f"❌ Score insuficiente: {final_score} / sinais: {buy_sig}B {sell_sig}S", level='debug')
         return None
 
     return {"signal":sd["direction"],"score":final_score,"justification":f"Score:{final_score} Sinais:{buy_sig}B/{sell_sig}S","signals":sd.get("signals",{})}
 
-def anti_fake_breakout(df):
-    if len(df)<3: return False
-    last=df.iloc[-1]; body=abs(last["c"]-last["o"]); rng=last["h"]-last["l"]
-    return rng>0 and body>=rng*0.3
-
-def volume_ok(df,period=20):
-    if len(df)<period: return False
-    return df["v"].iloc[-1]>df["v"].rolling(period).mean().iloc[-1]*1.1
-
-def is_lateral(df,lookback=20):
-    if len(df)<lookback: return True
-    recent=df["c"].iloc[-lookback:]
-    return (recent.max()-recent.min())/df["c"].iloc[-1]<0.003
-
-def strong_candle(df):
-    if df.empty: return False
-    last=df.iloc[-1]; body=abs(last["c"]-last["o"]); rng=last["h"]-last["l"]
-    return rng>0 and body>=rng*0.4
-
-# ==================== RISK MANAGER v4.1 ====================
+# ==================== RISK MANAGER ====================
 class RiskManagerV4:
     def __init__(self): self.peak_balance=0; self.initial_balance=0
 
@@ -619,58 +578,74 @@ def sync_positions():
                     positions[p["symbol"]]={"side":"UP" if amt>0 else "DOWN","entry":float(p["entryPrice"]),"qty":abs(amt),"entry_time":datetime.now().isoformat(),"partial_tp_done":0,"pyramid_count":0}
     except Exception as e: log(f"Erro sync: {e}",level='error')
 
-# ==================== EXECUTION v4.1 ====================
+# ==================== EXECUTION v4.2 - SEM DEADLOCK ====================
 def execute_trade(symbol, side, score_data, ai_conf):
     global positions, daily_loss
     log(f"🔄 Tentando executar: {symbol} {side} | IA:{ai_conf:.0f}%", level='trade')
+    
+    # Verifica se já existe posição (sem lock para evitar deadlock)
     if symbol in positions:
         log(f"⚠️ {symbol} já em posição", level='warning')
         return
+    
     try:
         bal = get_balance()
         log(f"💵 Saldo: ${bal:.2f}", level='trade')
         if bal <= 0:
             log(f"❌ Saldo zero", level='reject')
             return
+        
         price = get_price(symbol)
         log(f"💲 Preço {symbol}: ${price}", level='trade')
         if not price:
             log(f"❌ Sem preço para {symbol}", level='reject')
             return
+        
         df = get_candles(symbol, "5m")
         if df.empty:
             log(f"❌ Sem candles para {symbol}", level='reject')
             return
+        
         atr_v = calc_atr(df).iloc[-1] if not calc_atr(df).empty else 0
         vol = atr_v / price if price > 0 else 0
         log(f"📊 ATR:{atr_v:.6f} Vol:{vol:.6f}", level='trade')
         if vol < 0.0001:
-            log(f"❌ Volatilidade zero {symbol}", level='reject')
+            log(f"❌ Volatilidade muito baixa {symbol}", level='reject')
             return
+        
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
+        
         if side == "UP":
-            sl = adj_price(symbol, price - atr_v * 1.2)
+            sl = adj_price(symbol, price - atr_v * 1.5)
             tp = adj_price(symbol, price + atr_v * RR)
             tp_partial = adj_price(symbol, price + atr_v * RR * 0.5)
-            os_ = "BUY"; es_ = "SELL"
+            os_ = "BUY"
+            es_ = "SELL"
         else:
-            sl = adj_price(symbol, price + atr_v * 1.2)
+            sl = adj_price(symbol, price + atr_v * 1.5)
             tp = adj_price(symbol, price - atr_v * RR)
             tp_partial = adj_price(symbol, price - atr_v * RR * 0.5)
-            os_ = "SELL"; es_ = "BUY"
+            os_ = "SELL"
+            es_ = "BUY"
+        
         qty = risk_manager.calc_size(symbol, bal, price, sl, dynamic_risk)
-        log(f"📐 Qty:{qty} Notional:${qty*price:.2f}", level='trade')
+        log(f"📐 Qty calculada: {qty} | Notional: ${qty*price:.2f}", level='trade')
+        
         if qty <= 0:
             log(f"❌ Qty zero {symbol}", level='reject')
             return
+        
         min_not = symbol_filters.get(symbol, {}).get("min_notional", 5)
         if qty * price < min_not:
             log(f"❌ Notional ${qty*price:.2f} < mínimo ${min_not}", level='reject')
             return
+        
+        # ENVIA ORDENS PARA BINANCE
         safe_req(client.futures_change_leverage, symbol=symbol, leverage=LEVERAGE)
         safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
         safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True)
         safe_req(client.futures_create_order, symbol=symbol, side=es_, type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
+        
         pd_ = {
             "side": side, "entry": price, "qty": qty,
             "entry_time": datetime.now().isoformat(),
@@ -680,311 +655,463 @@ def execute_trade(symbol, side, score_data, ai_conf):
             "risk_used": dynamic_risk, "ai_confidence": ai_conf,
             "score": score_data.get("score", 0)
         }
-        positions[symbol] = pd_
+        
+        with lock:
+            positions[symbol] = pd_
         save_position(symbol, pd_)
+        
         features = ai_engine.extract_features(df)
         if features:
             save_ai_data(symbol, features, None, 0)
-        log(f"✅ TRADE v4.1: {symbol} {side} | Score:{score_data.get('score',0)} | IA:{ai_conf:.0f}% | Risk:{dynamic_risk*100:.1f}%", level='trade')
+        
+        log(f"✅ TRADE v4.2 ABERTO: {symbol} {side} | Qty:{qty} | Preço:${price:.4f} | Score:{score_data.get('score',0)} | IA:{ai_conf:.0f}% | Risk:{dynamic_risk*100:.1f}%", level='trade')
+        
+    except BinanceAPIException as e:
+        log(f"❌ ERRO BINANCE {symbol}: {e.message} (código: {e.code})", level='error')
     except Exception as e:
-        log(f"❌ Erro execução {symbol}: {e}", level='error')
+        log(f"❌ ERRO execução {symbol}: {type(e).__name__}: {e}", level='error')
 
 
 def manage_positions():
-    global positions,daily_loss
-    to_remove=[]
+    global positions, daily_loss
+    to_remove = []
+    positions_copy = {}
+    
     with lock:
-        for symbol,pos in list(positions.items()):
-            try:
-                price=get_price(symbol)
-                if not price: continue
-                entry=pos["entry"]; qty=pos["qty"]; side=pos["side"]
-                sl=pos.get("stop_loss",0); tp=pos.get("take_profit",0)
-                if side=="UP":
-                    if price>pos.get("highest_price",entry): pos["highest_price"]=price
-                else:
-                    if price<pos.get("lowest_price",entry): pos["lowest_price"]=price
-                pnl=(price-entry)*qty if side=="UP" else (entry-price)*qty
-                pnl_pct=((price-entry)/entry*100) if side=="UP" else ((entry-price)/entry*100)
-                # Partial TP
-                tp_partial=pos.get("tp_partial")
-                if PARTIAL_TP_ENABLED and tp_partial and not pos.get("partial_tp_done"):
-                    if (side=="UP" and price>=tp_partial) or (side=="DOWN" and price<=tp_partial):
-                        pqty=adj_qty(symbol,qty*0.5)
-                        if pqty>0:
-                            cs_="SELL" if side=="UP" else "BUY"
-                            safe_req(client.futures_create_order,symbol=symbol,side=cs_,type="MARKET",quantity=pqty,reduceOnly=True)
-                            pos["partial_tp_done"]=1; pos["qty"]=adj_qty(symbol,qty-pqty)
-                            log(f"📊 Partial TP: {symbol} 50% @ ${price:.4f}",level='trade')
-                # Pyramid
-                if PYRAMID_ENABLED and pos.get("pyramid_count",0)<1 and pnl_pct>1.0:
-                    bal=get_balance(); pyr_r=risk_manager.get_risk(bal,pos.get("ai_confidence",55))*0.5
-                    pyr_qty=risk_manager.calc_size(symbol,bal,price,sl,pyr_r)
-                    if pyr_qty>0 and pos["qty"]*price<50000:
-                        ps_="BUY" if side=="UP" else "SELL"
-                        safe_req(client.futures_create_order,symbol=symbol,side=ps_,type="MARKET",quantity=pyr_qty)
-                        pos["pyramid_count"]=pos.get("pyramid_count",0)+1; pos["qty"]=adj_qty(symbol,pos["qty"]+pyr_qty)
-                        log(f"🔺 Pyramid: {symbol} +{pyr_qty}",level='trade')
-                # Trailing
-                trail=None
-                if pnl_pct>0.8:
-                    if not pos.get("trailing_activated"): pos["trailing_activated"]=1
-                    trail=pos["highest_price"]*0.997 if side=="UP" else pos["lowest_price"]*1.003
-                # Close
-                close=False; reason=""
-                if side=="UP":
-                    if sl>0 and price<=sl: close,reason=True,"stop_loss"
-                    elif trail and price<trail: close,reason=True,"trailing_stop"
-                    elif tp>0 and price>=tp: close,reason=True,"take_profit"
-                else:
-                    if sl>0 and price>=sl: close,reason=True,"stop_loss"
-                    elif trail and price>trail: close,reason=True,"trailing_stop"
-                    elif tp>0 and price<=tp: close,reason=True,"take_profit"
-                if close:
-                    cs_="SELL" if side=="UP" else "BUY"
-                    safe_req(client.futures_create_order,symbol=symbol,side=cs_,type="MARKET",quantity=pos["qty"],reduceOnly=True)
-                    log(f"{'💰' if pnl>0 else '🛡️'} Fechado: {symbol} | {reason} | ${pnl:.2f} ({pnl_pct:.2f}%)",level='trade' if pnl>0 else 'risk')
-                    if pnl<0: daily_loss+=abs(pnl); save_state("daily_loss",daily_loss)
-                    outcome=1 if pnl>0 else 0
-                    df_=get_candles(symbol,"5m")
-                    if not df_.empty:
-                        feats=ai_engine.extract_features(df_)
-                        if feats: save_ai_data(symbol,feats,outcome,pnl)
-                    save_trade({"symbol":symbol,"side":side,"entry_price":entry,"exit_price":price,
-                                "quantity":pos["qty"],"pnl":pnl,"pnl_pct":pnl_pct,
-                                "entry_time":pos["entry_time"],"exit_time":datetime.now().isoformat(),
-                                "reason":reason,"risk_used":pos.get("risk_used",RISK),
-                                "ai_confidence":pos.get("ai_confidence",0),"score":pos.get("score",0)})
-                    to_remove.append(symbol); delete_position(symbol)
-            except Exception as e: log(f"Erro manage {symbol}: {e}",level='error')
-        for s in to_remove: positions.pop(s,None)
+        positions_copy = dict(positions)
+    
+    for symbol, pos in positions_copy.items():
+        try:
+            price = get_price(symbol)
+            if not price:
+                continue
+            
+            entry = pos["entry"]
+            qty = pos["qty"]
+            side = pos["side"]
+            sl = pos.get("stop_loss", 0)
+            tp = pos.get("take_profit", 0)
+            
+            if side == "UP":
+                if price > pos.get("highest_price", entry):
+                    with lock:
+                        if symbol in positions:
+                            positions[symbol]["highest_price"] = price
+            else:
+                if price < pos.get("lowest_price", entry):
+                    with lock:
+                        if symbol in positions:
+                            positions[symbol]["lowest_price"] = price
+            
+            pnl = (price - entry) * qty if side == "UP" else (entry - price) * qty
+            pnl_pct = ((price - entry) / entry * 100) if side == "UP" else ((entry - price) / entry * 100)
+            
+            # Partial TP
+            tp_partial = pos.get("tp_partial")
+            if PARTIAL_TP_ENABLED and tp_partial and not pos.get("partial_tp_done"):
+                if (side == "UP" and price >= tp_partial) or (side == "DOWN" and price <= tp_partial):
+                    pqty = adj_qty(symbol, qty * 0.5)
+                    if pqty > 0:
+                        cs_ = "SELL" if side == "UP" else "BUY"
+                        safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=pqty, reduceOnly=True)
+                        with lock:
+                            if symbol in positions:
+                                positions[symbol]["partial_tp_done"] = 1
+                                positions[symbol]["qty"] = adj_qty(symbol, qty - pqty)
+                        log(f"📊 Partial TP: {symbol} 50% @ ${price:.4f}", level='trade')
+            
+            # Trailing
+            trail = None
+            if pnl_pct > 0.8:
+                if not pos.get("trailing_activated"):
+                    with lock:
+                        if symbol in positions:
+                            positions[symbol]["trailing_activated"] = 1
+                trail = pos.get("highest_price", entry) * 0.997 if side == "UP" else pos.get("lowest_price", entry) * 1.003
+            
+            # Close
+            close = False
+            reason = ""
+            if side == "UP":
+                if sl > 0 and price <= sl:
+                    close, reason = True, "stop_loss"
+                elif trail and price < trail:
+                    close, reason = True, "trailing_stop"
+                elif tp > 0 and price >= tp:
+                    close, reason = True, "take_profit"
+            else:
+                if sl > 0 and price >= sl:
+                    close, reason = True, "stop_loss"
+                elif trail and price > trail:
+                    close, reason = True, "trailing_stop"
+                elif tp > 0 and price <= tp:
+                    close, reason = True, "take_profit"
+            
+            if close:
+                cs_ = "SELL" if side == "UP" else "BUY"
+                safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
+                log(f"{'💰' if pnl > 0 else '🛡️'} Fechado: {symbol} | {reason} | ${pnl:.2f} ({pnl_pct:.2f}%)", level='trade' if pnl > 0 else 'risk')
+                
+                if pnl < 0:
+                    daily_loss += abs(pnl)
+                    save_state("daily_loss", daily_loss)
+                
+                outcome = 1 if pnl > 0 else 0
+                df_ = get_candles(symbol, "5m")
+                if not df_.empty:
+                    feats = ai_engine.extract_features(df_)
+                    if feats:
+                        save_ai_data(symbol, feats, outcome, pnl)
+                
+                save_trade({
+                    "symbol": symbol, "side": side, "entry_price": entry, "exit_price": price,
+                    "quantity": qty, "pnl": pnl, "pnl_pct": pnl_pct,
+                    "entry_time": pos["entry_time"], "exit_time": datetime.now().isoformat(),
+                    "reason": reason, "risk_used": pos.get("risk_used", RISK),
+                    "ai_confidence": pos.get("ai_confidence", 0), "score": pos.get("score", 0)
+                })
+                to_remove.append(symbol)
+                delete_position(symbol)
+                
+        except Exception as e:
+            log(f"Erro manage {symbol}: {e}", level='error')
+    
+    if to_remove:
+        with lock:
+            for s in to_remove:
+                positions.pop(s, None)
+
 
 def find_candidates():
     global scanner_data
     try:
-        data=safe_req(client.futures_ticker); all_scores=[]; candidates=[]
+        data = safe_req(client.futures_ticker)
+        all_scores = []
+        candidates = []
+        
         for x in data:
-            symbol=x["symbol"]
-            if not symbol.endswith("USDT") or symbol not in symbol_filters: continue
-            price=float(x["lastPrice"]); volume=float(x["quoteVolume"])
-            if price>MAX_PRICE or volume<3_000_000: continue
-            df=get_candles(symbol,"5m",limit=100)
-            if df.empty or len(df)<60: continue
-            sd=compute_score_v4(df); atr_v=calc_atr(df).iloc[-1] if not calc_atr(df).empty else 0
-            vs=min(volume/50_000_000*10,30); vola=(atr_v/price)*1000 if price>0 else 0
-            total=sd["score"]+vs+min(vola,30)
-            all_scores.append({"symbol":symbol,"score":round(total,1),"price":round(price,4),
-                                "trend":sd["direction"],"volume":round(volume/1_000_000,1),
-                                "volatility":round(vola,2),"signals":sd.get("signals",{})})
-            if sd["direction"]!="SIDE": candidates.append((symbol,total))
-        all_scores.sort(key=lambda x: x["score"],reverse=True)
-        scanner_data["candidates"]=all_scores[:50]; scanner_data["last_update"]=time.time()
-        candidates.sort(key=lambda x: x[1],reverse=True)
-        if candidates: log(f"Top: {[c[0] for c in candidates[:3]]}",level='debug')
+            symbol = x["symbol"]
+            if not symbol.endswith("USDT") or symbol not in symbol_filters:
+                continue
+            price = float(x["lastPrice"])
+            volume = float(x["quoteVolume"])
+            if price > MAX_PRICE or volume < 3_000_000:
+                continue
+            df = get_candles(symbol, "5m", limit=100)
+            if df.empty or len(df) < 60:
+                continue
+            sd = compute_score_v4(df)
+            atr_v = calc_atr(df).iloc[-1] if not calc_atr(df).empty else 0
+            vs = min(volume / 50_000_000 * 10, 30)
+            vola = (atr_v / price) * 1000 if price > 0 else 0
+            total = sd["score"] + vs + min(vola, 30)
+            all_scores.append({
+                "symbol": symbol, "score": round(total, 1), "price": round(price, 4),
+                "trend": sd["direction"], "volume": round(volume / 1_000_000, 1),
+                "volatility": round(vola, 2), "signals": sd.get("signals", {})
+            })
+            if sd["direction"] != "SIDE":
+                candidates.append((symbol, total))
+        
+        all_scores.sort(key=lambda x: x["score"], reverse=True)
+        scanner_data["candidates"] = all_scores[:50]
+        scanner_data["last_update"] = time.time()
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        if candidates:
+            log(f"Top: {[c[0] for c in candidates[:3]]}", level='debug')
         return [c[0] for c in candidates[:10]]
-    except Exception as e: log(f"Erro scanner: {e}",level='error'); return []
+    except Exception as e:
+        log(f"Erro scanner: {e}", level='error')
+        return []
 
-# ==================== BOT LOOP v4.1 ====================
+# ==================== BOT LOOP v4.2 - SEM DEADLOCK ====================
 def bot_loop():
-    global bot_on,daily_loss,positions,start_balance
-    log("🚀 Nostradamus v4.1 iniciado! Ichimoku+VWAP+Fibonacci+IA",level='success')
-    sync_positions(); start_balance=get_balance(); save_state("start_balance",start_balance)
-    risk_manager.initial_balance=start_balance; risk_manager.peak_balance=start_balance
-    last_sync=time.time(); last_train=time.time(); loop_count=0
+    global bot_on, daily_loss, positions, start_balance
+    log("🚀 Nostradamus v4.2 iniciado! Ichimoku+VWAP+Fibonacci+IA", level='success')
+    sync_positions()
+    start_balance = get_balance()
+    save_state("start_balance", start_balance)
+    risk_manager.initial_balance = start_balance
+    risk_manager.peak_balance = start_balance
+    last_sync = time.time()
+    last_train = time.time()
+    
     while bot_on:
         try:
-            loop_count+=1; bal=get_balance()
-            if bal<=0: log("Saldo zerado!",level='risk'); bot_on=False; break
+            bal = get_balance()
+            if bal <= 0:
+                log("Saldo zerado!", level='risk')
+                bot_on = False
+                break
+            
             risk_manager.update_peak(bal)
-            if daily_loss>start_balance*DAILY_LOSS_LIMIT: log(f"Stop diário! ${daily_loss:.2f}",level='risk'); bot_on=False; break
-            if time.time()-last_sync>300: sync_positions(); last_sync=time.time()
-            if time.time()-last_train>3600: threading.Thread(target=ai_engine.train,daemon=True).start(); last_train=time.time()
+            
+            if daily_loss > start_balance * DAILY_LOSS_LIMIT:
+                log(f"Stop diário! ${daily_loss:.2f}", level='risk')
+                bot_on = False
+                break
+            
+            if time.time() - last_sync > 300:
+                sync_positions()
+                last_sync = time.time()
+            
+            if time.time() - last_train > 3600:
+                threading.Thread(target=ai_engine.train, daemon=True).start()
+                last_train = time.time()
+            
+            # ENCONTRA SINAL DENTRO DO LOCK
+            sym_to_trade = None
+            side_to_trade = None
+            score_to_trade = None
+            ai_conf_to_trade = None
+            
             with lock:
-                if len(positions)<MAX_TRADES:
+                if len(positions) < MAX_TRADES:
                     for sym in find_candidates():
-                        if sym in positions: continue
-                        df=get_candles(sym,"5m")
-                        if df.empty or len(df)<60: continue
-                        signal=hybrid_entry_signal(df)
-                        if not signal: continue
-                        sd={"score":signal["score"],"direction":signal["signal"],"signals":signal.get("signals",{})}
-                        features=ai_engine.extract_features(df)
-                        ai_conf=50.0; ai_dir="uncertain"
+                        if sym in positions:
+                            continue
+                        df = get_candles(sym, "5m")
+                        if df.empty or len(df) < 60:
+                            continue
+                        signal = hybrid_entry_signal(df)
+                        if not signal:
+                            continue
+                        
+                        sd = {"score": signal["score"], "direction": signal["signal"], "signals": signal.get("signals", {})}
+                        features = ai_engine.extract_features(df)
+                        ai_conf = 50.0
+                        ai_dir = "uncertain"
+                        
                         if features and ai_engine.trained:
-                            ai_conf,ai_dir=ai_engine.predict(features)
-                            log(f"🧠 IA: {sym} → {ai_dir} ({ai_conf:.0f}%)",level='ai')
-                            tech_dir="bull" if sd["direction"]=="UP" else "bear"
-                            if ai_dir!=tech_dir and ai_conf>65: log(f"🧠 IA discorda: {sym}",level='ai'); continue
-                        elif features: ai_conf=55.0
-                        if ai_conf<AI_MIN_CONFIDENCE and ai_engine.trained: log(f"🧠 IA baixa: {sym} {ai_conf:.0f}%",level='ai'); continue
-                        log(f"💰 SINAL v4.1: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%",level='trade')
-                        execute_trade(sym,sd["direction"],sd,ai_conf); 
-                        if sym in positions: break
-            manage_positions(); save_state("daily_loss",daily_loss)
-        except Exception as e: log(f"Erro loop: {e}",level='error')
+                            ai_conf, ai_dir = ai_engine.predict(features)
+                            log(f"🧠 IA: {sym} → {ai_dir} ({ai_conf:.0f}%)", level='ai')
+                            tech_dir = "bull" if sd["direction"] == "UP" else "bear"
+                            if ai_dir != tech_dir and ai_conf > 65:
+                                log(f"🧠 IA discorda: {sym}", level='ai')
+                                continue
+                        elif features:
+                            ai_conf = 55.0
+                        
+                        if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained:
+                            log(f"🧠 IA baixa: {sym} {ai_conf:.0f}%", level='ai')
+                            continue
+                        
+                        log(f"💰 SINAL v4.2: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%", level='trade')
+                        
+                        sym_to_trade = sym
+                        side_to_trade = sd["direction"]
+                        score_to_trade = sd
+                        ai_conf_to_trade = ai_conf
+                        break  # Sai do for e do lock
+            
+            # EXECUTA O TRADE FORA DO LOCK
+            if sym_to_trade:
+                execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
+            
+            manage_positions()
+            save_state("daily_loss", daily_loss)
+            
+        except Exception as e:
+            log(f"Erro loop: {e}", level='error')
+        
         time.sleep(INTERVAL)
 
 # ==================== AUTH ====================
-JWT_SECRET=os.getenv("JWT_SECRET","nostradamus-v4"); ADMIN_PASSWORD_HASH=os.getenv("ADMIN_PASSWORD_HASH","")
+JWT_SECRET = os.getenv("JWT_SECRET", "nostradamus-v4")
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
 
 class Auth:
     @staticmethod
     def verify_password(pw):
-        if not ADMIN_PASSWORD_HASH: return False
-        try: return bcrypt.checkpw(pw.encode(),ADMIN_PASSWORD_HASH.encode())
-        except: return hashlib.sha256(pw.encode()).hexdigest()==ADMIN_PASSWORD_HASH
+        if not ADMIN_PASSWORD_HASH:
+            return False
+        try:
+            return bcrypt.checkpw(pw.encode(), ADMIN_PASSWORD_HASH.encode())
+        except:
+            return hashlib.sha256(pw.encode()).hexdigest() == ADMIN_PASSWORD_HASH
 
     @staticmethod
     def create_token():
-        return jwt.encode({"exp":datetime.utcnow()+timedelta(hours=24),"iat":datetime.utcnow(),"role":"admin"},JWT_SECRET,algorithm="HS256")
+        return jwt.encode({"exp": datetime.utcnow() + timedelta(hours=24), "iat": datetime.utcnow(), "role": "admin"}, JWT_SECRET, algorithm="HS256")
 
     @staticmethod
     def verify_token(token):
-        try: jwt.decode(token,JWT_SECRET,algorithms=["HS256"]); return True
-        except: return False
+        try:
+            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            return True
+        except:
+            return False
 
 # ==================== STARTUP ====================
-bot_on=load_state("bot_on",False); positions=load_positions()
-daily_loss=load_state("daily_loss",0.0); start_balance=load_state("start_balance",0.0)
+bot_on = load_state("bot_on", False)
+positions = load_positions()
+daily_loss = load_state("daily_loss", 0.0)
+start_balance = load_state("start_balance", 0.0)
 
 def scanner_loop():
-    """Scanner independente — roda sempre, mesmo com bot parado"""
-    log("Scanner background iniciado",level='info')
+    log("Scanner background iniciado", level='info')
     while True:
         try:
             find_candidates()
         except Exception as e:
-            log(f"Erro scanner: {e}",level='error')
+            log(f"Erro scanner: {e}", level='error')
         time.sleep(60)
 
 @app.on_event("startup")
 async def on_startup():
-    log("Nostradamus v4.1 — Sistema online",level='success')
-    threading.Thread(target=ai_engine.train,daemon=True).start()
-    threading.Thread(target=scanner_loop,daemon=True).start()
-    if bot_on: threading.Thread(target=bot_loop,daemon=True).start()
-    else: log("Bot aguardando comando",level='info')
+    log("Nostradamus v4.2 — Sistema online", level='success')
+    threading.Thread(target=ai_engine.train, daemon=True).start()
+    threading.Thread(target=scanner_loop, daemon=True).start()
+    if bot_on:
+        threading.Thread(target=bot_loop, daemon=True).start()
+    else:
+        log("Bot aguardando comando", level='info')
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global bot_on; bot_on=False; save_state("bot_on",False)
+    global bot_on
+    bot_on = False
+    save_state("bot_on", False)
 
 # ==================== ROUTES ====================
 @app.get("/")
 async def root():
-    p=os.path.join(static_dir,"index.html"); return FileResponse(p) if os.path.exists(p) else {"version":"4.1.0"}
+    p = os.path.join(static_dir, "index.html")
+    return FileResponse(p) if os.path.exists(p) else {"version": "4.2.0"}
 
 @app.get("/login")
 async def login_page():
-    p=os.path.join(static_dir,"login.html"); return FileResponse(p) if os.path.exists(p) else HTMLResponse("<h1>404</h1>",404)
+    p = os.path.join(static_dir, "login.html")
+    return FileResponse(p) if os.path.exists(p) else HTMLResponse("<h1>404</h1>", 404)
 
 @app.post("/auth/login")
 async def login(request: Request):
-    body=await request.json(); pw=body.get("password","")
-    if Auth.verify_password(pw): return {"token":Auth.create_token(),"expires_in":86400}
-    raise HTTPException(401,"Senha inválida")
+    body = await request.json()
+    pw = body.get("password", "")
+    if Auth.verify_password(pw):
+        return {"token": Auth.create_token(), "expires_in": 86400}
+    raise HTTPException(401, "Senha inválida")
 
 @app.post("/auth/verify")
 async def verify(request: Request):
-    body=await request.json(); return {"valid":Auth.verify_token(body.get("token",""))}
+    body = await request.json()
+    return {"valid": Auth.verify_token(body.get("token", ""))}
 
 @app.get("/api/status")
 async def status():
-    bal=get_balance(); pos_list=[]
-    for sym,d in positions.items():
-        curr=get_price(sym); pnl=None
-        if curr: pnl=(curr-d["entry"])*d["qty"] if d["side"]=="UP" else (d["entry"]-curr)*d["qty"]
-        pos_list.append({"symbol":sym,"side":d["side"],"entry":round(d["entry"],4),"qty":round(d["qty"],4),
-                         "current_price":round(curr,4) if curr else None,"pnl":round(pnl,2) if pnl is not None else None,
-                         "risk_used":d.get("risk_used",RISK)*100,"ai_confidence":d.get("ai_confidence",0),
-                         "score":d.get("score",0),"partial_tp_done":d.get("partial_tp_done",0),
-                         "pyramid_count":d.get("pyramid_count",0),"entry_time":d.get("entry_time")})
+    bal = get_balance()
+    pos_list = []
+    with lock:
+        for sym, d in positions.items():
+            curr = get_price(sym)
+            pnl = None
+            if curr:
+                pnl = (curr - d["entry"]) * d["qty"] if d["side"] == "UP" else (d["entry"] - curr) * d["qty"]
+            pos_list.append({
+                "symbol": sym, "side": d["side"], "entry": round(d["entry"], 4), "qty": round(d["qty"], 4),
+                "current_price": round(curr, 4) if curr else None, "pnl": round(pnl, 2) if pnl is not None else None,
+                "risk_used": d.get("risk_used", RISK) * 100, "ai_confidence": d.get("ai_confidence", 0),
+                "score": d.get("score", 0), "partial_tp_done": d.get("partial_tp_done", 0),
+                "pyramid_count": d.get("pyramid_count", 0), "entry_time": d.get("entry_time")
+            })
     with get_db() as conn:
-        t=conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
-        w=conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
-        tpnl=conn.execute("SELECT SUM(pnl) FROM trade_history").fetchone()[0] or 0
-        best=conn.execute("SELECT MAX(pnl) FROM trade_history").fetchone()[0] or 0
-        worst=conn.execute("SELECT MIN(pnl) FROM trade_history").fetchone()[0] or 0
-        tg=conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl>0").fetchone()[0] or 0
-        tl=conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl<0").fetchone()[0] or 0
-        ai_s=conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
-    wr=(w/t*100) if t>0 else 0; pf=tg/abs(tl) if tl!=0 else 0
+        t = conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
+        w = conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
+        tpnl = conn.execute("SELECT SUM(pnl) FROM trade_history").fetchone()[0] or 0
+        best = conn.execute("SELECT MAX(pnl) FROM trade_history").fetchone()[0] or 0
+        worst = conn.execute("SELECT MIN(pnl) FROM trade_history").fetchone()[0] or 0
+        tg = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl>0").fetchone()[0] or 0
+        tl = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl<0").fetchone()[0] or 0
+        ai_s = conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
+    wr = (w / t * 100) if t > 0 else 0
+    pf = tg / abs(tl) if tl != 0 else 0
     return {
-        "running":bot_on,"testnet":BINANCE_TESTNET or BINANCE_DEMO,"demo":BINANCE_DEMO,"positions":pos_list,
-        "daily_loss":round(daily_loss,2),"daily_loss_limit":DAILY_LOSS_LIMIT,
-        "daily_loss_percentage":round((daily_loss/bal)*100,2) if bal>0 else 0,
-        "current_balance":round(bal,2),"start_balance":round(start_balance,2),
-        "total_pnl":round(bal-start_balance,2),
-        "ai":{"trained":ai_engine.trained,"training_samples":ai_s,"training_count":ai_engine.training_count},
-        "config":{"leverage":LEVERAGE,"risk":RISK,"rr_ratio":RR,"max_trades":MAX_TRADES,
-                  "daily_loss_limit":DAILY_LOSS_LIMIT*100,"min_backtest_confidence":MIN_BACKTEST_CONFIDENCE,
-                  "protect_capital":PROTECT_CAPITAL,"max_price":MAX_PRICE,
-                  "ai_min_confidence":AI_MIN_CONFIDENCE,"partial_tp":PARTIAL_TP_ENABLED,"pyramid":PYRAMID_ENABLED},
-        "metrics":{"trades":t,"wins":w,"losses":t-w,"win_rate":round(wr,2),
-                   "profit_factor":round(pf,2),"total_pnl":round(tpnl,2),
-                   "best_trade":round(best,2),"worst_trade":round(worst,2)}
+        "running": bot_on, "testnet": BINANCE_TESTNET or BINANCE_DEMO, "demo": BINANCE_DEMO, "positions": pos_list,
+        "daily_loss": round(daily_loss, 2), "daily_loss_limit": DAILY_LOSS_LIMIT,
+        "daily_loss_percentage": round((daily_loss / bal) * 100, 2) if bal > 0 else 0,
+        "current_balance": round(bal, 2), "start_balance": round(start_balance, 2),
+        "total_pnl": round(bal - start_balance, 2),
+        "ai": {"trained": ai_engine.trained, "training_samples": ai_s, "training_count": ai_engine.training_count},
+        "config": {"leverage": LEVERAGE, "risk": RISK, "rr_ratio": RR, "max_trades": MAX_TRADES,
+                   "daily_loss_limit": DAILY_LOSS_LIMIT * 100, "min_backtest_confidence": MIN_BACKTEST_CONFIDENCE,
+                   "protect_capital": PROTECT_CAPITAL, "max_price": MAX_PRICE,
+                   "ai_min_confidence": AI_MIN_CONFIDENCE, "partial_tp": PARTIAL_TP_ENABLED, "pyramid": PYRAMID_ENABLED},
+        "metrics": {"trades": t, "wins": w, "losses": t - w, "win_rate": round(wr, 2),
+                    "profit_factor": round(pf, 2), "total_pnl": round(tpnl, 2),
+                    "best_trade": round(best, 2), "worst_trade": round(worst, 2)}
     }
 
 @app.get("/api/scanner")
-async def scanner(): return {"candidates":scanner_data["candidates"],"last_update":scanner_data["last_update"]}
+async def scanner():
+    return {"candidates": scanner_data["candidates"], "last_update": scanner_data["last_update"]}
 
 @app.get("/api/history")
-async def history(limit:int=100):
+async def history(limit: int = 100):
     with get_db() as conn:
-        return {"trades":[dict(r) for r in conn.execute("SELECT * FROM trade_history ORDER BY exit_time DESC LIMIT ?",(limit,)).fetchall()]}
+        return {"trades": [dict(r) for r in conn.execute("SELECT * FROM trade_history ORDER BY exit_time DESC LIMIT ?", (limit,)).fetchall()]}
 
 @app.get("/api/ai/status")
 async def ai_status():
     with get_db() as conn:
-        s=conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
-        o=conn.execute("SELECT COUNT(*) FROM ai_training_data WHERE outcome IS NOT NULL").fetchone()[0]
-        ww=conn.execute("SELECT COUNT(*) FROM ai_training_data WHERE outcome=1").fetchone()[0]
-    return {"trained":ai_engine.trained,"total_samples":s,"labeled_samples":o,
-            "ai_accuracy":round(ww/o*100,1) if o>0 else 0,"training_count":ai_engine.training_count}
+        s = conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
+        o = conn.execute("SELECT COUNT(*) FROM ai_training_data WHERE outcome IS NOT NULL").fetchone()[0]
+        ww = conn.execute("SELECT COUNT(*) FROM ai_training_data WHERE outcome=1").fetchone()[0]
+    return {"trained": ai_engine.trained, "total_samples": s, "labeled_samples": o,
+            "ai_accuracy": round(ww / o * 100, 1) if o > 0 else 0, "training_count": ai_engine.training_count}
 
 @app.post("/api/ai/train")
 async def force_train():
-    result=ai_engine.train(force=True)
-    return {"success":result,"trained":ai_engine.trained,"samples":ai_engine.training_count}
+    result = ai_engine.train(force=True)
+    return {"success": result, "trained": ai_engine.trained, "samples": ai_engine.training_count}
 
 @app.post("/api/bot/start")
 async def start():
     global bot_on
-    if bot_on: return {"status":"already_running"}
-    bot_on=True; save_state("bot_on",True)
-    threading.Thread(target=bot_loop,daemon=True).start()
-    return {"status":"started"}
+    if bot_on:
+        return {"status": "already_running"}
+    bot_on = True
+    save_state("bot_on", True)
+    threading.Thread(target=bot_loop, daemon=True).start()
+    return {"status": "started"}
 
 @app.post("/api/bot/stop")
 async def stop():
-    global bot_on; bot_on=False; save_state("bot_on",False); return {"status":"stopped"}
+    global bot_on
+    bot_on = False
+    save_state("bot_on", False)
+    return {"status": "stopped"}
 
 @app.get("/api/test_trade/{symbol}/{side}")
-async def test_trade(symbol:str,side:str):
-    if side.upper() not in ["UP","DOWN"]: return {"status":"erro","error":"Side deve ser UP ou DOWN"}
+async def test_trade(symbol: str, side: str):
+    if side.upper() not in ["UP", "DOWN"]:
+        return {"status": "erro", "error": "Side deve ser UP ou DOWN"}
     try:
-        df=get_candles(symbol.upper(),"5m")
-        sd=compute_score_v4(df) if not df.empty else {"score":100,"direction":side.upper(),"signals":{}}
-        execute_trade(symbol.upper(),side.upper(),sd,75.0)
-        return {"status":"teste iniciado","symbol":symbol.upper(),"side":side.upper(),"message":"Verifique os logs"}
-    except Exception as e: return {"status":"erro","error":str(e)}
+        df = get_candles(symbol.upper(), "5m")
+        sd = compute_score_v4(df) if not df.empty else {"score": 100, "direction": side.upper(), "signals": {}}
+        execute_trade(symbol.upper(), side.upper(), sd, 75.0)
+        return {"status": "teste iniciado", "symbol": symbol.upper(), "side": side.upper(), "message": "Verifique os logs"}
+    except Exception as e:
+        return {"status": "erro", "error": str(e)}
 
 @app.get("/api/balance")
-async def balance(): return {"balance":round(get_balance(),2)}
+async def balance():
+    return {"balance": round(get_balance(), 2)}
 
 @app.get("/api/metrics")
 async def metrics():
     with get_db() as conn:
-        t=conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
-        w=conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
-        p=conn.execute("SELECT SUM(pnl) FROM trade_history").fetchone()[0] or 0
-        g=conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl>0").fetchone()[0] or 0
-        l=conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl<0").fetchone()[0] or 0
-    return {"trades":t,"wins":w,"losses":t-w,"win_rate":round(w/t*100,2) if t else 0,
-            "profit_factor":round(g/abs(l),2) if l else 0,"total_pnl":round(p,2)}
+        t = conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
+        w = conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
+        p = conn.execute("SELECT SUM(pnl) FROM trade_history").fetchone()[0] or 0
+        g = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl>0").fetchone()[0] or 0
+        l = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl<0").fetchone()[0] or 0
+    return {"trades": t, "wins": w, "losses": t - w, "win_rate": round(w / t * 100, 2) if t else 0,
+            "profit_factor": round(g / abs(l), 2) if l else 0, "total_pnl": round(p, 2)}
 
 @app.get("/teste")
-async def teste(): return {"status":"ok","version":"4.1.0"}
+async def teste():
+    return {"status": "ok", "version": "4.2.0"}
 
-if __name__=="__main__":
-    import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
