@@ -39,7 +39,7 @@ def log(msg, level='info'):
     else: logger.info(m)
 
 # ==================== CONFIG ====================
-LEVERAGE=10; RISK=0.03; RR=2.0; MAX_TRADES=2; DAILY_LOSS_LIMIT=0.05
+LEVERAGE=20; RISK=0.03; RR=2.0; MAX_TRADES=1; DAILY_LOSS_LIMIT=0.05
 INTERVAL=10; RISK_MAX=0.05; RISK_MIN=0.02; MIN_BACKTEST_CONFIDENCE=20.0
 PROTECT_CAPITAL=True; MAX_PRICE=20.0; AI_MIN_CONFIDENCE=40.0
 PARTIAL_TP_ENABLED=True; PYRAMID_ENABLED=True
@@ -665,15 +665,19 @@ def execute_trade(symbol, side, score_data, ai_conf):
             
             # Ordem Stop Loss (Essencial)
             try:
-                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True, timeInForce="GTC")
+                sl_order = safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True, timeInForce="GTC")
+                log(f"🛡️ Stop Loss colocado: {sl}", level='success')
             except Exception as e:
-                log(f"⚠️ Erro ao colocar Stop Loss: {e}", level='error')
+                log(f"❌ ERRO CRÍTICO STOP LOSS: {e}. FECHANDO POSIÇÃO POR SEGURANÇA!", level='error')
+                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="MARKET", quantity=qty, reduceOnly=True)
+                return
                 
             # Ordem Take Profit
             try:
                 safe_req(client.futures_create_order, symbol=symbol, side=es_, type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True, timeInForce="GTC")
+                log(f"💰 Take Profit colocado: {tp}", level='success')
             except Exception as e:
-                log(f"⚠️ Erro ao colocar Take Profit: {e}", level='warning')
+                log(f"⚠️ Erro Take Profit: {e}", level='warning')
         except Exception as e:
             log(f"❌ Falha crítica no envio das ordens: {e}", level='error')
             return
