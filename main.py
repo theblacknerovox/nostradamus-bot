@@ -39,8 +39,8 @@ def log(msg, level='info'):
     else: logger.info(m)
 
 # ==================== CONFIG ====================
-LEVERAGE=2; RISK=0.01; RR=2.0; MAX_TRADES=2; DAILY_LOSS_LIMIT=0.03
-INTERVAL=10; RISK_MAX=0.02; RISK_MIN=0.005; MIN_BACKTEST_CONFIDENCE=20.0
+LEVERAGE=10; RISK=0.03; RR=2.0; MAX_TRADES=2; DAILY_LOSS_LIMIT=0.05
+INTERVAL=10; RISK_MAX=0.05; RISK_MIN=0.02; MIN_BACKTEST_CONFIDENCE=20.0
 PROTECT_CAPITAL=True; MAX_PRICE=20.0; AI_MIN_CONFIDENCE=40.0
 PARTIAL_TP_ENABLED=True; PYRAMID_ENABLED=True
 
@@ -556,9 +556,15 @@ class RiskManagerV4:
 
     def calc_size(self,symbol,bal,entry,stop,risk_pct):
         if stop==entry or bal<=0: return 0
-        risk_amount=(bal*risk_pct)/LEVERAGE; dist=abs(entry-stop)
-        if dist==0: return 0
-        return adj_qty(symbol,risk_amount/dist)
+        # Corrigido: O risco deve ser sobre o capital total, não dividido pela alavancagem no cálculo do tamanho.
+        # A alavancagem permite operar volumes maiores, mas o risco define quanto perdemos se o stop for atingido.
+        risk_amount = bal * risk_pct
+        dist = abs(entry - stop)
+        if dist == 0: return 0
+        qty = risk_amount / dist
+        # Garantir que não excedemos o poder de compra (bal * alavancagem)
+        max_qty = (bal * LEVERAGE * 0.95) / entry
+        return adj_qty(symbol, min(qty, max_qty))
 
 risk_manager=RiskManagerV4()
 
@@ -616,17 +622,21 @@ def execute_trade(symbol, side, score_data, ai_conf):
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
         
         if side == "UP":
-            sl = adj_price(symbol, price - atr_v * 1.5)
-            tp = adj_price(symbol, price + atr_v * RR)
-            tp_partial = adj_price(symbol, price + atr_v * RR * 0.5)
+            sl = adj_price(symbol, price - max(atr_v * 1.5, price * 0.005))
+            tp = adj_price(symbol, price + max(atr_v * RR, price * 0.01))
+            tp_partial = adj_price(symbol, price + max(atr_v * RR * 0.5, price * 0.005))
             os_ = "BUY"
             es_ = "SELL"
         else:
-            sl = adj_price(symbol, price + atr_v * 1.5)
-            tp = adj_price(symbol, price - atr_v * RR)
-            tp_partial = adj_price(symbol, price - atr_v * RR * 0.5)
+            sl = adj_price(symbol, price + max(atr_v * 1.5, price * 0.005))
+            tp = adj_price(symbol, price - max(atr_v * RR, price * 0.01))
+            tp_partial = adj_price(symbol, price - max(atr_v * RR * 0.5, price * 0.005))
             os_ = "SELL"
             es_ = "BUY"
+        
+        # Garantir que SL não é igual ao preço (evitar erro de divisão por zero ou rejeição)
+        if sl == price:
+            sl = adj_price(symbol, price * 0.995 if side == "UP" else price * 1.005)
         
         qty = risk_manager.calc_size(symbol, bal, price, sl, dynamic_risk)
         log(f"📐 Qty calculada: {qty} | Notional: ${qty*price:.2f}", level='trade')
@@ -641,10 +651,32 @@ def execute_trade(symbol, side, score_data, ai_conf):
             return
         
         # ENVIA ORDENS PARA BINANCE
-        safe_req(client.futures_change_leverage, symbol=symbol, leverage=LEVERAGE)
-        safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
-        safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True)
-        safe_req(client.futures_create_order, symbol=symbol, side=es_, type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
+        try:
+            safe_req(client.futures_change_leverage, symbol=symbol, leverage=LEVERAGE)
+            # Definir tipo de margem para ISOLATED para melhor gestão de risco individual
+            try:
+                safe_req(client.futures_change_margin_type, symbol=symbol, marginType="ISOLATED")
+            except:
+                pass # Pode falhar se já estiver em ISOLATED
+                
+            # Ordem Principal
+            order = safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
+            log(f"📦 Ordem MARKET enviada: {order.get('orderId')}", level='success')
+            
+            # Ordem Stop Loss (Essencial)
+            try:
+                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True, timeInForce="GTC")
+            except Exception as e:
+                log(f"⚠️ Erro ao colocar Stop Loss: {e}", level='error')
+                
+            # Ordem Take Profit
+            try:
+                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True, timeInForce="GTC")
+            except Exception as e:
+                log(f"⚠️ Erro ao colocar Take Profit: {e}", level='warning')
+        except Exception as e:
+            log(f"❌ Falha crítica no envio das ordens: {e}", level='error')
+            return
         
         pd_ = {
             "side": side, "entry": price, "qty": qty,
