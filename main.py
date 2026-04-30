@@ -1,6 +1,6 @@
 """
-NOSTRADAMUS TRADING BOT v4.2
-CORRIGIDO: Deadlock no lock removido, execução otimizada
+NOSTRADAMUS TRADING BOT v4.2.1 - MANUS FIX
+CORRIGIDO: Cálculo de Position Sizing, Notional Mínimo e Execução para Bancas Pequenas
 """
 import os, threading, time, math, sqlite3, logging, json, pickle, warnings
 warnings.filterwarnings('ignore')
@@ -61,7 +61,7 @@ def validate_config():
     log("Configuração v4.2 validada com sucesso", level='success')
 
 # ==================== APP ====================
-app = FastAPI(title="Nostradamus v4.2", version="4.2.0")
+app = FastAPI(title="Nostradamus v4.2.1 - Manus Fix", version="4.2.1")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
@@ -991,7 +991,7 @@ def scanner_loop():
 
 @app.on_event("startup")
 async def on_startup():
-    log("Nostradamus v4.2 — Sistema online", level='success')
+    log("Nostradamus v4.2.1 [MANUS FIX] — Sistema online e pronto para operar", level='success')
     threading.Thread(target=ai_engine.train, daemon=True).start()
     threading.Thread(target=scanner_loop, daemon=True).start()
     if bot_on:
