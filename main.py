@@ -859,15 +859,15 @@ def manage_positions():
                                 positions[symbol]["qty"] = adj_qty(symbol, qty - pqty)
                         log(f"📊 Partial TP: {symbol} 50% @ ${price:.4f}", level='trade')
             
-            # [INSTITUCIONAL] Trailing Stop Otimizado: 1.5% de recuo para deixar o lucro crescer
+            # [INSTITUCIONAL] Modo Scalper Sniper: 0.5% de recuo (equivale a ~10% de lucro real com 20x)
             trail = None
-            if pnl_pct > 1.5: # Ativa após 1.5% de lucro
+            if pnl_pct > 0.5: # Ativa após 0.5% de lucro no preço (10% ROI)
                 if not pos.get("trailing_activated"):
                     with lock:
                         if symbol in positions:
                             positions[symbol]["trailing_activated"] = 1
-                # Recuo de 1.5% para fecho (mais folga para volatilidade)
-                trail = pos.get("highest_price", entry) * 0.985 if side == "UP" else pos.get("lowest_price", entry) * 1.015
+                # Recuo de 0.5% para fecho (garante o lucro rápido)
+                trail = pos.get("highest_price", entry) * 0.995 if side == "UP" else pos.get("lowest_price", entry) * 1.005
             
             # Close
             close = False
