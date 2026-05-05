@@ -275,6 +275,16 @@ def calc_atr(df,period=14):
     tr=pd.concat([df["h"]-df["l"],(df["h"]-df["c"].shift()).abs(),(df["l"]-df["c"].shift()).abs()],axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
+def calc_adx(df, period=14):
+    plus_dm = df["h"].diff(); minus_dm = df["l"].diff()
+    plus_dm[plus_dm < 0] = 0; minus_dm[minus_dm > 0] = 0
+    tr = pd.concat([df["h"]-df["l"], (df["h"]-df["c"].shift()).abs(), (df["l"]-df["c"].shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
+    minus_di = 100 * (abs(minus_dm.rolling(period).mean()) / atr)
+    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, 1e-10))
+    return dx.rolling(period).mean()
+
 def calc_macd(df):
     e12=calc_ema(df["c"],12); e26=calc_ema(df["c"],26); line=e12-e26
     signal=calc_ema(line,9); return line,signal,line-signal
@@ -454,12 +464,13 @@ class AIEngine:
 ai_engine=AIEngine()
 
 # ==================== STRATEGY v4.2 ====================
-def compute_score_v4(df):
+def compute_score_v4(df, symbol=None):
     if len(df)<60: return {"score":0,"direction":"SIDE","signals":{}}
     price=df["c"].iloc[-1]
     e20=calc_ema(df["c"],20).iloc[-1]; e50=calc_ema(df["c"],50).iloc[-1]
     e200=calc_ema(df["c"],200).iloc[-1] if len(df)>=200 else e50
     rsi_v=calc_rsi(df).iloc[-1]; atr_v=calc_atr(df).iloc[-1]
+    adx_v=calc_adx(df).iloc[-1] if len(df)>=30 else 0
     ml,ms,mh=calc_macd(df); macd_h=mh.iloc[-1]
     bb_u,bb_m,bb_l=calc_bollinger(df)
     ichi_s,ichi_str=ichimoku_signal(df); vwap_s=vwap_signal(df)
@@ -469,8 +480,20 @@ def compute_score_v4(df):
     near_sr=any(abs(l["price"]-price)<atr_v*1.5 for l in levels[:3])
     vol_r=df["v"].iloc[-1]/(df["v"].iloc[-20:-1].mean()+1e-10)
     buy=0; sell=0; bs=0; ss=0; sigs={}
+
+    # [MODO SNIPER] Filtro de Força de Tendência (ADX)
+    if adx_v < 20:
+        return {"score":0,"direction":"SIDE","signals":{"adx":"mercado_lateral"}}
     
-    # Filtro de Tendência EMA 200 (Filtro Mestre)
+    # [MODO SNIPER] Filtro Multi-Timeframe (MTF) - Tendência de 1h
+    if symbol:
+        df_1h = get_candles(symbol, "1h", limit=50)
+        if not df_1h.empty:
+            ema200_1h = calc_ema(df_1h["c"], 200).iloc[-1] if len(df_1h)>=200 else calc_ema(df_1h["c"], 50).iloc[-1]
+            if price > ema200_1h: buy += 30; sigs["mtf_1h"] = "bull"
+            else: sell += 30; sigs["mtf_1h"] = "bear"
+
+    # Filtro de Tendência EMA 200 (Filtro Mestre 5m)
     if price > e200:
         buy += 25; bs += 1; sigs["trend"] = "bull_200"
     elif price < e200:
@@ -534,8 +557,8 @@ def hybrid_entry_signal(df):
     sd = compute_score_v4(df)
     if sd["direction"]=="SIDE": return None
     
-    min_score = 45
-    min_signals = 3
+    min_score = 75
+    min_signals = 4
     
     final_score = sd["score"]
     buy_sig = sd.get("buy_sig", 0)
@@ -634,15 +657,16 @@ def execute_trade(symbol, side, score_data, ai_conf):
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
         
         if side == "UP":
-            sl = adj_price(symbol, price - max(atr_v * 1.5, price * 0.005))
-            tp = adj_price(symbol, price + max(atr_v * RR, price * 0.01))
-            tp_partial = adj_price(symbol, price + max(atr_v * RR * 0.5, price * 0.005))
+            # [MODO SNIPER] Stop Loss mais largo (2.0 ATR) para evitar ruído, mas com alvo maior (3.0 RR)
+            sl = adj_price(symbol, price - max(atr_v * 2.0, price * 0.008))
+            tp = adj_price(symbol, price + max(atr_v * 3.0, price * 0.015))
+            tp_partial = adj_price(symbol, price + max(atr_v * 1.5, price * 0.008))
             os_ = "BUY"
             es_ = "SELL"
         else:
-            sl = adj_price(symbol, price + max(atr_v * 1.5, price * 0.005))
-            tp = adj_price(symbol, price - max(atr_v * RR, price * 0.01))
-            tp_partial = adj_price(symbol, price - max(atr_v * RR * 0.5, price * 0.005))
+            sl = adj_price(symbol, price + max(atr_v * 2.0, price * 0.008))
+            tp = adj_price(symbol, price - max(atr_v * 3.0, price * 0.015))
+            tp_partial = adj_price(symbol, price - max(atr_v * 1.5, price * 0.008))
             os_ = "SELL"
             es_ = "BUY"
         
