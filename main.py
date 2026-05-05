@@ -764,21 +764,8 @@ def execute_trade(symbol, side, score_data, ai_conf):
             order = safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
             log(f"📦 Ordem MARKET enviada: {order.get('orderId')}", level='success')
             
-            # Ordem Stop Loss (Essencial)
-            try:
-                sl_order = safe_req(client.futures_create_order, symbol=symbol, side=es_, type="STOP_MARKET", stopPrice=sl, closePosition=True, timeInForce="GTC")
-                log(f"🛡️ Stop Loss colocado: {sl}", level='success')
-            except Exception as e:
-                log(f"❌ ERRO CRÍTICO STOP LOSS: {e}. FECHANDO POSIÇÃO POR SEGURANÇA!", level='error')
-                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="MARKET", quantity=qty, reduceOnly=True)
-                return
-                
-            # Ordem Take Profit
-            try:
-                safe_req(client.futures_create_order, symbol=symbol, side=es_, type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True, timeInForce="GTC")
-                log(f"💰 Take Profit colocado: {tp}", level='success')
-            except Exception as e:
-                log(f"⚠️ Erro Take Profit: {e}", level='warning')
+            # [INSTITUCIONAL] Virtual TP/SL: Monitoramento interno para evitar erros de API em bancas pequenas
+            log(f"🛡️ Virtual SL: {sl} | 💰 Virtual TP: {tp}", level='info')
         except Exception as e:
             log(f"❌ Falha crítica no envio das ordens: {e}", level='error')
             return
