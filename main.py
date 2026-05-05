@@ -804,7 +804,22 @@ def manage_positions():
     with lock:
         positions_copy = dict(positions)
     
+    # [INSTITUCIONAL] Sincronização com a Binance: Remove posições fechadas manualmente
+    try:
+        binance_positions = safe_req(client.futures_position_information)
+        active_symbols = {p['symbol'] for p in binance_positions if float(p['positionAmt']) != 0}
+    except Exception as e:
+        log(f"Erro ao sincronizar posições com Binance: {e}", level='error')
+        active_symbols = set(positions_copy.keys()) # Fallback para não fechar nada por erro de API
+
     for symbol, pos in positions_copy.items():
+        # Se a posição não existe mais na Binance, removemos do monitoramento interno
+        if symbol not in active_symbols:
+            log(f"🧹 Sincronização: Removendo {symbol} (fechada manualmente ou externa)", level='info')
+            to_remove.append(symbol)
+            delete_position(symbol)
+            continue
+
         try:
             price = get_price(symbol)
             if not price:
