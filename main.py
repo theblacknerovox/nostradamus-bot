@@ -1069,23 +1069,28 @@ async def verify(request: Request):
     body = await request.json()
     return {"valid": Auth.verify_token(body.get("token", ""))}
 
-@app.get("/api/status")
-async def status():
-    bal = get_balance()
+@app.get("/api/positions")
+async def get_active_positions():
     pos_list = []
     with lock:
         for sym, d in positions.items():
             curr = get_price(sym)
-            pnl = None
+            pnl = 0
             if curr:
                 pnl = (curr - d["entry"]) * d["qty"] if d["side"] == "UP" else (d["entry"] - curr) * d["qty"]
             pos_list.append({
                 "symbol": sym, "side": d["side"], "entry": round(d["entry"], 4), "qty": round(d["qty"], 4),
-                "current_price": round(curr, 4) if curr else None, "pnl": round(pnl, 2) if pnl is not None else None,
+                "current_price": round(curr, 4) if curr else None, "pnl": round(pnl, 2),
                 "risk_used": d.get("risk_used", RISK) * 100, "ai_confidence": d.get("ai_confidence", 0),
                 "score": d.get("score", 0), "partial_tp_done": d.get("partial_tp_done", 0),
                 "pyramid_count": d.get("pyramid_count", 0), "entry_time": d.get("entry_time")
             })
+    return {"positions": pos_list}
+
+@app.get("/api/status")
+async def status():
+    bal = get_balance()
+    pos_list = (await get_active_positions())["positions"]
     with get_db() as conn:
         t = conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
         w = conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
