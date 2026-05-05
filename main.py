@@ -859,14 +859,15 @@ def manage_positions():
                                 positions[symbol]["qty"] = adj_qty(symbol, qty - pqty)
                         log(f"📊 Partial TP: {symbol} 50% @ ${price:.4f}", level='trade')
             
-            # Trailing
+            # [INSTITUCIONAL] Trailing Stop Otimizado: 1.5% de recuo para deixar o lucro crescer
             trail = None
-            if pnl_pct > 0.8:
+            if pnl_pct > 1.5: # Ativa após 1.5% de lucro
                 if not pos.get("trailing_activated"):
                     with lock:
                         if symbol in positions:
                             positions[symbol]["trailing_activated"] = 1
-                trail = pos.get("highest_price", entry) * 0.997 if side == "UP" else pos.get("lowest_price", entry) * 1.003
+                # Recuo de 1.5% para fecho (mais folga para volatilidade)
+                trail = pos.get("highest_price", entry) * 0.985 if side == "UP" else pos.get("lowest_price", entry) * 1.015
             
             # Close
             close = False
@@ -888,8 +889,14 @@ def manage_positions():
             
             if close:
                 cs_ = "SELL" if side == "UP" else "BUY"
-                safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
-                log(f"{'💰' if pnl > 0 else '🛡️'} Fechado: {symbol} | {reason} | ${pnl:.2f} ({pnl_pct:.2f}%)", level='trade' if pnl > 0 else 'risk')
+                # [INSTITUCIONAL] Fecho Forçado: Tenta fechar a posição com prioridade máxima
+                try:
+                    safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
+                    log(f"{'💰' if pnl > 0 else '🛡️'} Fechado: {symbol} | {reason} | ${pnl:.2f} ({pnl_pct:.2f}%)", level='trade' if pnl > 0 else 'risk')
+                except Exception as e:
+                    log(f"⚠️ Falha no fecho de {symbol}: {e}. Tentando novamente...", level='error')
+                    # Segunda tentativa sem reduceOnly caso haja erro de margem
+                    safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty)
                 
                 if pnl < 0:
                     daily_loss += abs(pnl)
