@@ -721,17 +721,20 @@ def execute_trade(symbol, side, score_data, ai_conf):
         
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
         
+        # [INSTITUCIONAL] Relação Risco/Recompensa 1:3
+        risk_dist = max(atr_v * 1.5, price * 0.005) # Risco baseado em ATR
+        reward_dist = risk_dist * 3.0 # Alvo 3x maior que o risco
+
         if side == "UP":
-            # [MODO SNIPER] Alvos mais curtos para garantir lucro rápido com banca pequena
-            sl = adj_price(symbol, price - max(atr_v * 1.5, price * 0.006))
-            tp = adj_price(symbol, price + max(atr_v * 2.0, price * 0.01))
-            tp_partial = adj_price(symbol, price + max(atr_v * 1.0, price * 0.005))
+            sl = adj_price(symbol, price - risk_dist)
+            tp = adj_price(symbol, price + reward_dist)
+            tp_partial = adj_price(symbol, price + risk_dist) # Parcial no 1:1
             os_ = "BUY"
             es_ = "SELL"
         else:
-            sl = adj_price(symbol, price + max(atr_v * 1.5, price * 0.006))
-            tp = adj_price(symbol, price - max(atr_v * 2.0, price * 0.01))
-            tp_partial = adj_price(symbol, price - max(atr_v * 1.0, price * 0.005))
+            sl = adj_price(symbol, price + risk_dist)
+            tp = adj_price(symbol, price - reward_dist)
+            tp_partial = adj_price(symbol, price - risk_dist) # Parcial no 1:1
             os_ = "SELL"
             es_ = "BUY"
         
@@ -859,15 +862,27 @@ def manage_positions():
                                 positions[symbol]["qty"] = adj_qty(symbol, qty - pqty)
                         log(f"📊 Partial TP: {symbol} 50% @ ${price:.4f}", level='trade')
             
-            # [INSTITUCIONAL] Modo Scalper Sniper: 0.5% de recuo (equivale a ~10% de lucro real com 20x)
+            # [INSTITUCIONAL] Gestão de Risco Dinâmica: Breakeven + Trailing
             trail = None
-            if pnl_pct > 0.5: # Ativa após 0.5% de lucro no preço (10% ROI)
+            
+            # 1. Mover para Breakeven (Zero Risco) após 0.3% de lucro no preço (~6% ROI)
+            if pnl_pct > 0.3:
+                if side == "UP":
+                    sl = max(sl, entry * 1.0005) # Entrada + pequena taxa
+                else:
+                    sl = min(sl, entry * 0.9995)
+                with lock:
+                    if symbol in positions:
+                        positions[symbol]["stop_loss"] = sl
+
+            # 2. Trailing Stop Ativo após 0.6% de lucro (~12% ROI)
+            if pnl_pct > 0.6:
                 if not pos.get("trailing_activated"):
                     with lock:
                         if symbol in positions:
                             positions[symbol]["trailing_activated"] = 1
-                # Recuo de 0.5% para fecho (garante o lucro rápido)
-                trail = pos.get("highest_price", entry) * 0.995 if side == "UP" else pos.get("lowest_price", entry) * 1.005
+                # Recuo de 0.4% para fecho (garante o lucro rápido e protege contra reversões)
+                trail = pos.get("highest_price", entry) * 0.996 if side == "UP" else pos.get("lowest_price", entry) * 1.004
             
             # Close
             close = False
