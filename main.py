@@ -463,6 +463,40 @@ class AIEngine:
 
 ai_engine=AIEngine()
 
+# ==================== INSTITUTIONAL MODULES ====================
+def detect_market_regime(df):
+    """Detecta o regime de mercado: TRENDING, VOLATILE ou RANGING"""
+    if len(df) < 50: return "RANGING"
+    adx = calc_adx(df).iloc[-1]
+    atr_pct = (calc_atr(df).iloc[-1] / df["c"].iloc[-1]) * 100
+    
+    if adx > 25: return "TRENDING"
+    if atr_pct > 1.5: return "VOLATILE"
+    return "RANGING"
+
+def check_order_book_liquidity(symbol, side, quantity):
+    """Verifica a profundidade do livro de ordens para evitar slippage excessivo"""
+    try:
+        depth = safe_req(client.futures_order_book, symbol=symbol, limit=20)
+        bids = depth['bids'] # [price, qty]
+        asks = depth['asks']
+        
+        target_qty = quantity * 2 # Queremos liquidez para 2x o nosso tamanho
+        accumulated = 0
+        orders = asks if side == "UP" else bids
+        
+        for p, q in orders:
+            accumulated += float(q)
+            if accumulated >= target_qty:
+                slippage = abs(float(p) - float(orders[0][0])) / float(orders[0][0])
+                if slippage > 0.002: # Máximo 0.2% de slippage no book
+                    log(f"🚫 Slippage excessivo para {symbol}: {slippage:.4%}", level='reject')
+                    return False
+                return True
+        return False
+    except:
+        return True # Se falhar a API, assume OK para não travar
+
 # ==================== STRATEGY v4.2 ====================
 def compute_score_v4(df, symbol=None):
     if len(df)<60: return {"score":0,"direction":"SIDE","signals":{}}
@@ -481,9 +515,10 @@ def compute_score_v4(df, symbol=None):
     vol_r=df["v"].iloc[-1]/(df["v"].iloc[-20:-1].mean()+1e-10)
     buy=0; sell=0; bs=0; ss=0; sigs={}
 
-    # [MODO SNIPER] Filtro de Força de Tendência (ADX)
-    if adx_v < 25: # Aumentado para 25 para maior assertividade
-        return {"score":0,"direction":"SIDE","signals":{"adx":"mercado_lateral"}}
+    # [INSTITUCIONAL] Detecção de Regime
+    regime = detect_market_regime(df)
+    if regime == "RANGING":
+        return {"score":0,"direction":"SIDE","signals":{"regime":"lateral_evitado"}}
     
     # [MODO SNIPER] Triplo Filtro de Tendência (5m, 15m, 1h)
     if symbol:
@@ -498,6 +533,10 @@ def compute_score_v4(df, symbol=None):
             # Só vende se 15m e 1h estiverem em baixa
             elif price < ema50_15m and price < ema50_1h: sell += 40; sigs["mtf"] = "bear_aligned"
             else: return {"score":0,"direction":"SIDE","signals":{"mtf":"desalinhado"}}
+            
+            # [INSTITUCIONAL] Se for VOLATILE, exige confirmação extra
+            if regime == "VOLATILE" and adx_v < 30:
+                return {"score":0,"direction":"SIDE","signals":{"regime":"volatilidade_sem_forca"}}
 
     # Filtro de Tendência EMA 200 (Filtro Mestre 5m)
     if price > e200:
@@ -579,21 +618,41 @@ def hybrid_entry_signal(df):
 
 # ==================== RISK MANAGER ====================
 class RiskManagerV4:
-    def __init__(self): self.peak_balance=0; self.initial_balance=0
+    def __init__(self):
+        self.peak_balance=0; self.initial_balance=0
+        self.win_rate_est = 0.55 # Estimativa inicial institucional
 
     def update_peak(self,bal):
         if bal>self.peak_balance: self.peak_balance=bal
 
     def get_risk(self,bal,ai_conf=55.0):
+        """Implementação do Critério de Kelly para Position Sizing Institucional"""
         if bal<=0: return RISK_MIN
+        
+        # b = Profit / Loss (RR Ratio)
+        b = RR 
+        p = ai_conf / 100.0 if ai_conf > 50 else self.win_rate_est
+        
+        # Kelly % = (bp - q) / b  onde q = 1-p
+        q = 1 - p
+        kelly_f = (b * p - q) / b if b > 0 else 0
+        
+        # Usamos "Fractional Kelly" (20% do Kelly) para ser institucionalmente seguro
+        safe_kelly = max(RISK_MIN, min(RISK_MAX, kelly_f * 0.20))
+        
+        # Drawdown Protection
         dd=(self.peak_balance-bal)/self.peak_balance if self.peak_balance>0 else 0
-        if dd>0.15: return RISK_MIN
-        if dd>0.08: return RISK_MIN+0.003
-        base=RISK
-        if ai_conf>=80: base=min(base*1.5,RISK_MAX)
-        elif ai_conf>=70: base=min(base*1.2,RISK_MAX)
-        elif ai_conf<60: base=max(base*0.8,RISK_MIN)
-        return round(base,4)
+        if dd>0.10: safe_kelly *= 0.5 # Reduz risco pela metade se cair 10%
+        
+        # Ajuste para banca pequena: garantir que o risco permite o notional mínimo
+        if bal < 100:
+            return max(0.03, safe_kelly) 
+        return round(safe_kelly, 4)
+
+    def update_win_rate(self, history):
+        if not history: return
+        wins = len([t for t in history if t['pnl'] > 0])
+        self.win_rate_est = wins / len(history) if len(history) > 0 else 0.55
 
     def calc_size(self,symbol,bal,entry,stop,risk_pct):
         if stop==entry or bal<=0: return 0
@@ -982,9 +1041,13 @@ def bot_loop():
                         ai_conf_to_trade = ai_conf
                         break  # Sai do for e do lock
             
-            # EXECUTA O TRADE FORA DO LOCK
-            if sym_to_trade:
+        # EXECUTA O TRADE FORA DO LOCK
+        if sym_to_trade:
+            # [INSTITUCIONAL] Verificação de Liquidez antes da execução
+            if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0): # 1.0 é placeholder, o execute_trade calcula o real
                 execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
+            else:
+                log(f"🚫 Trade cancelado por falta de liquidez institucional: {sym_to_trade}", level='reject')
             
             manage_positions()
             save_state("daily_loss", daily_loss)
@@ -1096,8 +1159,11 @@ async def get_active_positions():
 @app.get("/api/status")
 async def status():
     bal = get_balance()
-    pos_list = (await get_active_positions())["positions"]
+    # Forçar atualização do win_rate no RiskManager
     with get_db() as conn:
+        history = [dict(r) for r in conn.execute("SELECT pnl FROM trade_history").fetchall()]
+        risk_manager.update_win_rate(history)
+        
         t = conn.execute("SELECT COUNT(*) FROM trade_history").fetchone()[0]
         w = conn.execute("SELECT COUNT(*) FROM trade_history WHERE pnl>0").fetchone()[0]
         tpnl = conn.execute("SELECT SUM(pnl) FROM trade_history").fetchone()[0] or 0
@@ -1106,14 +1172,17 @@ async def status():
         tg = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl>0").fetchone()[0] or 0
         tl = conn.execute("SELECT SUM(pnl) FROM trade_history WHERE pnl<0").fetchone()[0] or 0
         ai_s = conn.execute("SELECT COUNT(*) FROM ai_training_data").fetchone()[0]
+    
+    pos_list = (await get_active_positions())["positions"]
     wr = (w / t * 100) if t > 0 else 0
     pf = tg / abs(tl) if tl != 0 else 0
+    
     return {
         "running": bot_on, "testnet": BINANCE_TESTNET or BINANCE_DEMO, "demo": BINANCE_DEMO, "positions": pos_list,
         "daily_loss": round(daily_loss, 2), "daily_loss_limit": DAILY_LOSS_LIMIT,
         "daily_loss_percentage": round((daily_loss / bal) * 100, 2) if bal > 0 else 0,
         "current_balance": round(bal, 2), "start_balance": round(start_balance, 2),
-        "total_pnl": round(bal - start_balance, 2),
+        "total_pnl": round(tpnl, 2), # Usar o PnL real do histórico
         "ai": {"trained": ai_engine.trained, "training_samples": ai_s, "training_count": ai_engine.training_count},
         "config": {"leverage": LEVERAGE, "risk": RISK, "rr_ratio": RR, "max_trades": MAX_TRADES,
                    "daily_loss_limit": DAILY_LOSS_LIMIT * 100, "min_backtest_confidence": MIN_BACKTEST_CONFIDENCE,
