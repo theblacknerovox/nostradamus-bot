@@ -1041,14 +1041,14 @@ def bot_loop():
                         ai_conf_to_trade = ai_conf
                         break  # Sai do for e do lock
             
-        # EXECUTA O TRADE FORA DO LOCK
-        if sym_to_trade:
-            # [INSTITUCIONAL] Verificação de Liquidez antes da execução
-            if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0): # 1.0 é placeholder, o execute_trade calcula o real
-                execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
-            else:
-                log(f"🚫 Trade cancelado por falta de liquidez institucional: {sym_to_trade}", level='reject')
-            
+            # EXECUTA O TRADE FORA DO LOCK
+            if sym_to_trade:
+                # [INSTITUCIONAL] Verificação de Liquidez antes da execução
+                if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0): # 1.0 é placeholder, o execute_trade calcula o real
+                    execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
+                else:
+                    log(f"🚫 Trade cancelado por falta de liquidez institucional: {sym_to_trade}", level='reject')
+                
             manage_positions()
             save_state("daily_loss", daily_loss)
             
