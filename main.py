@@ -482,16 +482,22 @@ def compute_score_v4(df, symbol=None):
     buy=0; sell=0; bs=0; ss=0; sigs={}
 
     # [MODO SNIPER] Filtro de Força de Tendência (ADX)
-    if adx_v < 20:
+    if adx_v < 25: # Aumentado para 25 para maior assertividade
         return {"score":0,"direction":"SIDE","signals":{"adx":"mercado_lateral"}}
     
-    # [MODO SNIPER] Filtro Multi-Timeframe (MTF) - Tendência de 1h
+    # [MODO SNIPER] Triplo Filtro de Tendência (5m, 15m, 1h)
     if symbol:
+        df_15m = get_candles(symbol, "15m", limit=50)
         df_1h = get_candles(symbol, "1h", limit=50)
-        if not df_1h.empty:
-            ema200_1h = calc_ema(df_1h["c"], 200).iloc[-1] if len(df_1h)>=200 else calc_ema(df_1h["c"], 50).iloc[-1]
-            if price > ema200_1h: buy += 30; sigs["mtf_1h"] = "bull"
-            else: sell += 30; sigs["mtf_1h"] = "bear"
+        if not df_15m.empty and not df_1h.empty:
+            ema50_15m = calc_ema(df_15m["c"], 50).iloc[-1]
+            ema50_1h = calc_ema(df_1h["c"], 50).iloc[-1]
+            
+            # Só compra se 15m e 1h estiverem em alta
+            if price > ema50_15m and price > ema50_1h: buy += 40; sigs["mtf"] = "bull_aligned"
+            # Só vende se 15m e 1h estiverem em baixa
+            elif price < ema50_15m and price < ema50_1h: sell += 40; sigs["mtf"] = "bear_aligned"
+            else: return {"score":0,"direction":"SIDE","signals":{"mtf":"desalinhado"}}
 
     # Filtro de Tendência EMA 200 (Filtro Mestre 5m)
     if price > e200:
@@ -657,16 +663,16 @@ def execute_trade(symbol, side, score_data, ai_conf):
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
         
         if side == "UP":
-            # [MODO SNIPER] Stop Loss mais largo (2.0 ATR) para evitar ruído, mas com alvo maior (3.0 RR)
-            sl = adj_price(symbol, price - max(atr_v * 2.0, price * 0.008))
-            tp = adj_price(symbol, price + max(atr_v * 3.0, price * 0.015))
-            tp_partial = adj_price(symbol, price + max(atr_v * 1.5, price * 0.008))
+            # [MODO SNIPER] Alvos mais curtos para garantir lucro rápido com banca pequena
+            sl = adj_price(symbol, price - max(atr_v * 1.5, price * 0.006))
+            tp = adj_price(symbol, price + max(atr_v * 2.0, price * 0.01))
+            tp_partial = adj_price(symbol, price + max(atr_v * 1.0, price * 0.005))
             os_ = "BUY"
             es_ = "SELL"
         else:
-            sl = adj_price(symbol, price + max(atr_v * 2.0, price * 0.008))
-            tp = adj_price(symbol, price - max(atr_v * 3.0, price * 0.015))
-            tp_partial = adj_price(symbol, price - max(atr_v * 1.5, price * 0.008))
+            sl = adj_price(symbol, price + max(atr_v * 1.5, price * 0.006))
+            tp = adj_price(symbol, price - max(atr_v * 2.0, price * 0.01))
+            tp_partial = adj_price(symbol, price - max(atr_v * 1.0, price * 0.005))
             os_ = "SELL"
             es_ = "BUY"
         
