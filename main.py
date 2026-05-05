@@ -470,14 +470,22 @@ def compute_score_v4(df):
     vol_r=df["v"].iloc[-1]/(df["v"].iloc[-20:-1].mean()+1e-10)
     buy=0; sell=0; bs=0; ss=0; sigs={}
     
-    if price>e20>e50: buy+=20;bs+=1;sigs["ema"]="bull"
-    elif price<e20<e50: sell+=20;ss+=1;sigs["ema"]="bear"
+    # Filtro de Tendência EMA 200 (Filtro Mestre)
+    if price > e200:
+        buy += 25; bs += 1; sigs["trend"] = "bull_200"
+    elif price < e200:
+        sell += 25; ss += 1; sigs["trend"] = "bear_200"
+
+    # Alinhamento de Médias Curtas
+    if price > e20 > e50: buy += 15; bs += 1; sigs["ema_align"] = "bull"
+    elif price < e20 < e50: sell += 15; ss += 1; sigs["ema_align"] = "bear"
     
-    if price>e200: buy+=15;bs+=1;sigs["ema200"]="bull"
-    elif price<e200: sell+=15;ss+=1;sigs["ema200"]="bear"
+    # RSI com Zonas de Exaustão (Evitar comprar no topo ou vender no fundo)
+    if 45 <= rsi_v <= 65: buy += 15; bs += 1; sigs["rsi"] = f"bull({rsi_v:.0f})"
+    elif rsi_v > 75: buy -= 20; sigs["rsi"] = "sobrecomprado" # Penaliza compra em topo
     
-    if 40<=rsi_v<=65 and price>e50: buy+=15;bs+=1;sigs["rsi"]=f"bull({rsi_v:.0f})"
-    elif 35<=rsi_v<=60 and price<e50: sell+=15;ss+=1;sigs["rsi"]=f"bear({rsi_v:.0f})"
+    if 35 <= rsi_v <= 55: sell += 15; ss += 1; sigs["rsi"] = f"bear({rsi_v:.0f})"
+    elif rsi_v < 25: sell -= 20; sigs["rsi"] = "sobrevendido" # Penaliza venda em fundo
     
     if macd_h>0 and ml.iloc[-1]>ms.iloc[-1]: buy+=12;bs+=1;sigs["macd"]="bull"
     elif macd_h<0 and ml.iloc[-1]<ms.iloc[-1]: sell+=12;ss+=1;sigs["macd"]="bear"
@@ -513,8 +521,12 @@ def compute_score_v4(df):
     if price>e50 and price<bb_u.iloc[-1]: buy+=8;sigs["bb"]="bull"
     elif price<e50 and price>bb_l.iloc[-1]: sell+=8;sigs["bb"]="bear"
 
-    if buy>sell and bs>=2: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
-    if sell>buy and ss>=2: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    # Filtro de Volume Mínimo para Entrada
+    if vol_r < 1.1:
+        buy -= 10; sell -= 10; sigs["vol_low"] = "baixo_volume"
+
+    if buy>sell and bs>=3: return {"score":buy,"direction":"UP","buy_sig":bs,"sell_sig":ss,"signals":sigs}
+    if sell>buy and ss>=3: return {"score":sell,"direction":"DOWN","buy_sig":bs,"sell_sig":ss,"signals":sigs}
     return {"score":0,"direction":"SIDE","buy_sig":bs,"sell_sig":ss,"signals":sigs}
 
 def hybrid_entry_signal(df):
@@ -522,8 +534,8 @@ def hybrid_entry_signal(df):
     sd = compute_score_v4(df)
     if sd["direction"]=="SIDE": return None
     
-    min_score = 20
-    min_signals = 2
+    min_score = 45
+    min_signals = 3
     
     final_score = sd["score"]
     buy_sig = sd.get("buy_sig", 0)
