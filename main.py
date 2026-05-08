@@ -906,18 +906,25 @@ def manage_positions():
                 cs_ = "SELL" if side == "UP" else "BUY"
                 # [INSTITUCIONAL] Fecho Forçado: Tenta fechar a posição com prioridade máxima
                 try:
+                    # Recalcular PnL real no momento do fecho para o histórico
+                    final_price = get_price(symbol) or price
+                    real_pnl = (final_price - entry) * qty if side == "UP" else (entry - final_price) * qty
+                    real_pnl_pct = ((final_price - entry) / entry * 100) if side == "UP" else ((entry - final_price) / entry * 100)
+                    
                     safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
-                    log(f"{'💰' if pnl > 0 else '🛡️'} Fechado: {symbol} | {reason} | ${pnl:.2f} ({pnl_pct:.2f}%)", level='trade' if pnl > 0 else 'risk')
+                    log(f"{'💰' if real_pnl > 0 else '🛡️'} Fechado: {symbol} | {reason} | ${real_pnl:.2f} ({real_pnl_pct:.2f}%)", level='trade' if real_pnl > 0 else 'risk')
                 except Exception as e:
                     log(f"⚠️ Falha no fecho de {symbol}: {e}. Tentando novamente...", level='error')
-                    # Segunda tentativa sem reduceOnly caso haja erro de margem
                     safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty)
+                    final_price = get_price(symbol) or price
+                    real_pnl = (final_price - entry) * qty if side == "UP" else (entry - final_price) * qty
+                    real_pnl_pct = ((final_price - entry) / entry * 100) if side == "UP" else ((entry - final_price) / entry * 100)
                 
-                if pnl < 0:
-                    daily_loss += abs(pnl)
+                if real_pnl < 0:
+                    daily_loss += abs(real_pnl)
                     save_state("daily_loss", daily_loss)
                 
-                outcome = 1 if pnl > 0 else 0
+                outcome = 1 if real_pnl > 0 else 0
                 df_ = get_candles(symbol, "5m")
                 if not df_.empty:
                     feats = ai_engine.extract_features(df_)
@@ -925,8 +932,8 @@ def manage_positions():
                         save_ai_data(symbol, feats, outcome, pnl)
                 
                 save_trade({
-                    "symbol": symbol, "side": side, "entry_price": entry, "exit_price": price,
-                    "quantity": qty, "pnl": pnl, "pnl_pct": pnl_pct,
+                    "symbol": symbol, "side": side, "entry_price": entry, "exit_price": final_price,
+                    "quantity": qty, "pnl": real_pnl, "pnl_pct": real_pnl_pct,
                     "entry_time": pos["entry_time"], "exit_time": datetime.now().isoformat(),
                     "reason": reason, "risk_used": pos.get("risk_used", RISK),
                     "ai_confidence": pos.get("ai_confidence", 0), "score": pos.get("score", 0)
@@ -1176,7 +1183,9 @@ async def get_active_positions():
                 "current_price": round(curr, 4) if curr else None, "pnl": round(pnl, 2),
                 "risk_used": d.get("risk_used", RISK) * 100, "ai_confidence": d.get("ai_confidence", 0),
                 "score": d.get("score", 0), "partial_tp_done": d.get("partial_tp_done", 0),
-                "pyramid_count": d.get("pyramid_count", 0), "entry_time": d.get("entry_time")
+                "pyramid_count": d.get("pyramid_count", 0), "entry_time": d.get("entry_time"),
+                "take_profit": round(d.get("take_profit", 0), 4),
+                "stop_loss": round(d.get("stop_loss", 0), 4)
             })
     return {"positions": pos_list}
 
