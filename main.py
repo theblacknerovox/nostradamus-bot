@@ -236,12 +236,17 @@ def adj_qty(symbol,qty):
     qty=math.floor(qty/step)*step
     return max(min(round(qty,prec),f["max_qty"]),f["min_qty"])
 
-def adj_price(symbol,price):
-    if symbol not in symbol_filters: return price
-    f=symbol_filters[symbol]; tick=f["tick"]
-    prec=max(0,int(round(-math.log10(tick)))) if tick>0 else 0
-    price=round(price/tick)*tick
-    return round(max(min(price,f["max_price"]),f["min_price"]),prec)
+
+def adj_price(symbol, price):
+    if symbol not in symbol_filters: return round(price, 8)
+    f = symbol_filters[symbol]
+    tick = f["tick"]
+    # Cálculo de precisão mais robusto
+    prec = max(0, int(round(-math.log10(tick)))) if tick > 0 else 8
+    # Arredondar para o tick size correto
+    price = round(price / tick) * tick
+    return float(f"{price:.{prec}f}")
+
 
 def get_price(symbol):
     try: return float(safe_req(client.futures_symbol_ticker,symbol=symbol)["price"])
@@ -743,10 +748,15 @@ def execute_trade(symbol, side, score_data, ai_conf):
                 log(f"❌ Saldo insuficiente para notional mínimo: {symbol}", level='reject')
                 return
 
+        
         # EXECUÇÃO NA BINANCE
-        safe_req(client.futures_change_leverage, symbol=symbol, leverage=LEVERAGE)
         try:
-            safe_req(client.futures_change_margin_type, symbol=symbol, marginType="ISOLATED")
+            safe_req(client.futures_change_leverage, symbol=symbol, leverage=LEVERAGE)
+            # Mudar tipo de margem apenas se necessário para evitar erro -4046
+            pos_info = safe_req(client.futures_position_information, symbol=symbol)
+            if pos_info and pos_info[0].get('marginType') != 'isolated':
+                try: safe_req(client.futures_change_margin_type, symbol=symbol, marginType="ISOLATED")
+                except: pass
         except: pass
             
         # 1. Ordem Principal
@@ -755,9 +765,10 @@ def execute_trade(symbol, side, score_data, ai_conf):
         
         # 2. Ordem de STOP LOSS REAL na Binance
         try:
+            # Para STOP_MARKET em Futuros, usamos stopPrice
             safe_req(client.futures_create_order, 
                      symbol=symbol, side=es_, type="STOP_MARKET", 
-                     stopPrice=sl, quantity=qty, reduceOnly=True)
+                     stopPrice=sl, quantity=qty, reduceOnly=True, workingType="MARK_PRICE")
             log(f"🛡️ Stop Loss Real definido em {sl}", level='success')
         except Exception as e:
             log(f"⚠️ Falha ao definir SL real {symbol}: {e}", level='error')
@@ -770,6 +781,7 @@ def execute_trade(symbol, side, score_data, ai_conf):
             log(f"💰 Take Profit Real definido em {tp}", level='success')
         except Exception as e:
             log(f"⚠️ Falha ao definir TP real {symbol}: {e}", level='error')
+
 
         pd_ = {
             "side": side, "entry": entry_price, "qty": qty,
