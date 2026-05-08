@@ -686,6 +686,7 @@ def sync_positions():
 
 # ==================== EXECUTION v4.2 - SEM DEADLOCK ====================
 
+
 def execute_trade(symbol, side, score_data, ai_conf):
     global positions, daily_loss
     log(f"🔄 Tentando executar: {symbol} {side} | IA:{ai_conf:.0f}%", level='trade')
@@ -737,7 +738,6 @@ def execute_trade(symbol, side, score_data, ai_conf):
         
         min_not = symbol_filters.get(symbol, {}).get("min_notional", 5)
         if qty * price < min_not:
-            # Ajuste forçado para banca pequena para atingir o notional mínimo
             qty = adj_qty(symbol, (min_not * 1.05) / price)
             if qty * price > bal * LEVERAGE:
                 log(f"❌ Saldo insuficiente para notional mínimo: {symbol}", level='reject')
@@ -753,14 +753,23 @@ def execute_trade(symbol, side, score_data, ai_conf):
         order = safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
         entry_price = float(order.get('avgPrice', price))
         
-        # 2. Ordem de STOP LOSS REAL na Binance (Proteção Máxima)
+        # 2. Ordem de STOP LOSS REAL na Binance
         try:
             safe_req(client.futures_create_order, 
                      symbol=symbol, side=es_, type="STOP_MARKET", 
                      stopPrice=sl, quantity=qty, reduceOnly=True)
             log(f"🛡️ Stop Loss Real definido em {sl}", level='success')
         except Exception as e:
-            log(f"⚠️ Falha ao definir SL real: {e}. Usando monitoramento virtual.", level='warning')
+            log(f"⚠️ Falha ao definir SL real: {e}", level='warning')
+
+        # 3. Ordem de TAKE PROFIT REAL na Binance (LIMIT)
+        try:
+            safe_req(client.futures_create_order, 
+                     symbol=symbol, side=es_, type="LIMIT", 
+                     price=tp, quantity=qty, timeInForce="GTC", reduceOnly=True)
+            log(f"💰 Take Profit Real definido em {tp}", level='success')
+        except Exception as e:
+            log(f"⚠️ Falha ao definir TP real: {e}", level='warning')
 
         pd_ = {
             "side": side, "entry": entry_price, "qty": qty,
@@ -776,6 +785,10 @@ def execute_trade(symbol, side, score_data, ai_conf):
             positions[symbol] = pd_
         save_position(symbol, pd_)
         log(f"✅ TRADE ABERTO: {symbol} {side} | Qty:{qty} | Entrada:${entry_price:.4f} | SL:${sl:.4f} | TP:${tp:.4f}", level='trade')
+        
+    except Exception as e:
+        log(f"❌ ERRO execução {symbol}: {e}", level='error')
+
         
     except Exception as e:
         log(f"❌ ERRO execução {symbol}: {e}", level='error')
@@ -1122,24 +1135,57 @@ async def verify(request: Request):
     return {"valid": Auth.verify_token(body.get("token", ""))}
 
 @app.get("/api/positions")
+
 async def get_active_positions():
     pos_list = []
-    with lock:
-        for sym, d in positions.items():
-            curr = get_price(sym)
-            pnl = 0
-            if curr:
-                pnl = (curr - d["entry"]) * d["qty"] if d["side"] == "UP" else (d["entry"] - curr) * d["qty"]
-            pos_list.append({
-                "symbol": sym, "side": d["side"], "entry": round(d["entry"], 4), "qty": round(d["qty"], 4),
-                "current_price": round(curr, 4) if curr else None, "pnl": round(pnl, 2),
-                "risk_used": d.get("risk_used", RISK) * 100, "ai_confidence": d.get("ai_confidence", 0),
-                "score": d.get("score", 0), "partial_tp_done": d.get("partial_tp_done", 0),
-                "pyramid_count": d.get("pyramid_count", 0), "entry_time": d.get("entry_time"),
-                "take_profit": round(d.get("take_profit", 0), 4),
-                "stop_loss": round(d.get("stop_loss", 0), 4)
-            })
+    try:
+        # Consultar posições reais na Binance
+        binance_data = safe_req(client.futures_position_information)
+        real_positions = {p['symbol']: p for p in binance_data if float(p['positionAmt']) != 0}
+        
+        # Consultar ordens abertas para pegar TP/SL reais
+        open_orders = safe_req(client.futures_get_open_orders)
+        orders_by_symbol = {}
+        for o in open_orders:
+            s = o['symbol']
+            if s not in orders_by_symbol: orders_by_symbol[s] = []
+            orders_by_symbol[s].append(o)
+
+        with lock:
+            for sym, p_real in real_positions.items():
+                amt = float(p_real['positionAmt'])
+                side = "UP" if amt > 0 else "DOWN"
+                entry = float(p_real['entryPrice'])
+                curr = float(p_real['markPrice'])
+                qty = abs(amt)
+                pnl = float(p_real['unRealizedProfit'])
+                roe = (pnl / (entry * qty / LEVERAGE)) * 100 if entry > 0 else 0
+                
+                # Tentar pegar TP/SL das ordens abertas ou do banco de dados
+                sl = 0
+                tp = 0
+                if sym in orders_by_symbol:
+                    for o in orders_by_symbol[sym]:
+                        if o['type'] == 'STOP_MARKET': sl = float(o['stopPrice'])
+                        if o['type'] == 'LIMIT': tp = float(o['price'])
+                
+                # Fallback para o banco de dados se não achar ordens
+                if sl == 0 and sym in positions: sl = positions[sym].get('stop_loss', 0)
+                if tp == 0 and sym in positions: tp = positions[sym].get('take_profit', 0)
+
+                pos_list.append({
+                    "symbol": sym, "side": side, "entry": round(entry, 4), "qty": round(qty, 4),
+                    "current_price": round(curr, 4), "pnl": round(pnl, 2), "roe": round(roe, 2),
+                    "risk_used": positions.get(sym, {}).get("risk_used", 0.03) * 100,
+                    "ai_confidence": positions.get(sym, {}).get("ai_confidence", 0),
+                    "score": positions.get(sym, {}).get("score", 0),
+                    "take_profit": round(tp, 4), "stop_loss": round(sl, 4),
+                    "entry_time": positions.get(sym, {}).get("entry_time", datetime.now().isoformat())
+                })
+    except Exception as e:
+        log(f"Erro ao buscar posições reais: {e}", level='error')
     return {"positions": pos_list}
+
 
 @app.get("/api/status")
 async def status():

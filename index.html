@@ -918,7 +918,7 @@ function renderPositions(pos){
         <td><span class="tag ${sC}">${p.side==='UP'?'↑ LONG':'↓ SHORT'}</span></td>
         <td>$${(p.entry||0).toFixed(4)}</td>
         <td>$${p.current_price?p.current_price.toFixed(4):'—'}</td>
-        <td class="${pC}">${p.pnl!=null?(p.pnl>=0?'+':'')+'$'+p.pnl.toFixed(2):'—'}</td>
+        <td class="${pC}">${p.pnl!=null?(p.pnl>=0?'+':'')+'$'+p.pnl.toFixed(2):'—'} (${p.roe||0}%)</td>
         <td class="g">$${(p.take_profit||0).toFixed(4)}</td>
         <td class="r">$${(p.stop_loss||0).toFixed(4)}</td>
         <td>${(p.ai_confidence||0).toFixed(0)}%</td>
