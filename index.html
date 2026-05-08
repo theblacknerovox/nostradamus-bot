@@ -560,7 +560,7 @@ tr:hover td{background:rgba(255,255,255,.015)}
           <div class="panel-body np">
             <div class="tbl-wrap">
               <table>
-                <thead><tr><th>Par</th><th>Lado</th><th>Entrada</th><th>Preço</th><th>PnL</th><th>IA%</th></tr></thead>
+                <thead><tr><th>Par</th><th>Lado</th><th>Entrada</th><th>Preço</th><th>PnL</th><th>TP</th><th>SL</th><th>IA%</th></tr></thead>
                 <tbody id="pos-table"><tr><td colspan="6" class="empty">Nenhuma posição aberta</td></tr></tbody>
               </table>
             </div>
@@ -909,11 +909,20 @@ function renderPositions(pos){
         <td>${p.score||0}</td>
       </tr>`;
     }).join('');
-  document.getElementById('pos-table').innerHTML=pos.length===0?'<tr><td colspan="6" class="empty">Nenhuma posição aberta</td></tr>':
+  document.getElementById('pos-table').innerHTML=pos.length===0?'<tr><td colspan="8" class="empty">Nenhuma posição aberta</td></tr>':
     pos.map(p=>{
       const pC=(p.pnl||0)>=0?'g':'r';
       const sC=p.side==='UP'?'tag-up':'tag-dn';
-      return `<tr><td style="font-weight:600">${p.symbol}</td><td><span class="tag ${sC}">${p.side==='UP'?'↑ LONG':'↓ SHORT'}</span></td><td>$${(p.entry||0).toFixed(4)}</td><td>$${p.current_price?p.current_price.toFixed(4):'—'}</td><td class="${pC}">${p.pnl!=null?(p.pnl>=0?'+':'')+'$'+p.pnl.toFixed(2):'—'}</td><td>${(p.ai_confidence||0).toFixed(0)}%</td></tr>`;
+      return `<tr>
+        <td style="font-weight:600">${p.symbol}</td>
+        <td><span class="tag ${sC}">${p.side==='UP'?'↑ LONG':'↓ SHORT'}</span></td>
+        <td>$${(p.entry||0).toFixed(4)}</td>
+        <td>$${p.current_price?p.current_price.toFixed(4):'—'}</td>
+        <td class="${pC}">${p.pnl!=null?(p.pnl>=0?'+':'')+'$'+p.pnl.toFixed(2):'—'}</td>
+        <td class="g">$${(p.take_profit||0).toFixed(4)}</td>
+        <td class="r">$${(p.stop_loss||0).toFixed(4)}</td>
+        <td>${(p.ai_confidence||0).toFixed(0)}%</td>
+      </tr>`;
     }).join('');
   document.getElementById('pos-full').innerHTML=rows;
 }
