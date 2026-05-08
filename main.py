@@ -880,16 +880,21 @@ def manage_positions():
                 elif (side == "UP" and price <= sl) or (side == "DOWN" and price >= sl):
                     close = True; reason = "stop_loss"
 
+            
             if close:
                 cs_ = "SELL" if side == "UP" else "BUY"
+                log(f"🚨 FECHAMENTO FORÇADO PELO BOT: {symbol} por {reason} | Preço: {price}", level='risk')
                 try:
-                    # Cancelar ordens pendentes antes de fechar a mercado
-                    safe_req(client.futures_cancel_all_open_orders, symbol=symbol)
+                    # Tenta cancelar ordens existentes primeiro
+                    try: safe_req(client.futures_cancel_all_open_orders, symbol=symbol)
+                    except: pass
+                    
+                    # Ordem de mercado para fechar tudo
                     order = safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
-                    final_price = float(order.get('avgPrice', price))
+                    final_price = float(order.get('avgPrice', 0)) or float(order.get('price', 0)) or price
                     real_pnl = (final_price - entry) * qty if side == "UP" else (entry - final_price) * qty
                     
-                    log(f"🏁 Fechado: {symbol} | {reason} | PnL: ${real_pnl:.2f}", level='trade' if real_pnl > 0 else 'risk')
+                    log(f"🏁 Posição {symbol} encerrada com sucesso via Bot Monitor. PnL: ${real_pnl:.2f}", level='success')
                     
                     if real_pnl < 0:
                         daily_loss += abs(real_pnl)
@@ -898,11 +903,14 @@ def manage_positions():
                         "symbol": symbol, "side": side, "entry_price": entry, "exit_price": final_price,
                         "quantity": qty, "pnl": real_pnl, "pnl_pct": pnl_pct,
                         "entry_time": pos["entry_time"], "exit_time": datetime.now().isoformat(),
-                        "reason": reason, "risk_used": pos.get("risk_used", 0.03),
+                        "reason": f"bot_{reason}", "risk_used": pos.get("risk_used", 0.03),
                         "ai_confidence": pos.get("ai_confidence", 0), "score": pos.get("score", 0)
                     })
                     to_remove.append(symbol)
                     delete_position(symbol)
+                except Exception as e:
+                    log(f"❌ FALHA CRÍTICA ao fechar {symbol} via Bot Monitor: {e}. Tentando novamente em 1s...", level='error')
+
                 except Exception as e:
                     log(f"❌ Erro ao fechar {symbol}: {e}", level='error')
                     
@@ -1085,6 +1093,17 @@ positions = load_positions()
 daily_loss = load_state("daily_loss", 0.0)
 start_balance = load_state("start_balance", 0.0)
 
+
+def fast_monitor_loop():
+    log("🚀 Monitoramento Ultra-Rápido de TP/SL iniciado (1s)", level='info')
+    while True:
+        try:
+            if bot_on:
+                manage_positions()
+        except Exception as e:
+            log(f"Erro no monitoramento rápido: {e}", level='error')
+        time.sleep(1) # Verifica a cada 1 segundo
+
 def scanner_loop():
     log("Scanner background iniciado", level='info')
     while True:
@@ -1099,6 +1118,7 @@ async def on_startup():
     log("Nostradamus v4.2.1 [MANUS FIX] — Sistema online e pronto para operar", level='success')
     threading.Thread(target=ai_engine.train, daemon=True).start()
     threading.Thread(target=scanner_loop, daemon=True).start()
+    threading.Thread(target=fast_monitor_loop, daemon=True).start()
     if bot_on:
         threading.Thread(target=bot_loop, daemon=True).start()
     else:
