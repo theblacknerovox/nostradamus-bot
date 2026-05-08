@@ -751,7 +751,7 @@ def execute_trade(symbol, side, score_data, ai_conf):
             
         # 1. Ordem Principal
         order = safe_req(client.futures_create_order, symbol=symbol, side=os_, type="MARKET", quantity=qty)
-        entry_price = float(order.get('avgPrice', price))
+        entry_price = float(order.get('avgPrice', 0)) or float(order.get('price', 0)) or price
         
         # 2. Ordem de STOP LOSS REAL na Binance
         try:
@@ -760,7 +760,7 @@ def execute_trade(symbol, side, score_data, ai_conf):
                      stopPrice=sl, quantity=qty, reduceOnly=True)
             log(f"🛡️ Stop Loss Real definido em {sl}", level='success')
         except Exception as e:
-            log(f"⚠️ Falha ao definir SL real: {e}", level='warning')
+            log(f"⚠️ Falha ao definir SL real {symbol}: {e}", level='error')
 
         # 3. Ordem de TAKE PROFIT REAL na Binance (LIMIT)
         try:
@@ -769,7 +769,7 @@ def execute_trade(symbol, side, score_data, ai_conf):
                      price=tp, quantity=qty, timeInForce="GTC", reduceOnly=True)
             log(f"💰 Take Profit Real definido em {tp}", level='success')
         except Exception as e:
-            log(f"⚠️ Falha ao definir TP real: {e}", level='warning')
+            log(f"⚠️ Falha ao definir TP real {symbol}: {e}", level='error')
 
         pd_ = {
             "side": side, "entry": entry_price, "qty": qty,
@@ -1159,7 +1159,7 @@ async def get_active_positions():
                 curr = float(p_real['markPrice'])
                 qty = abs(amt)
                 pnl = float(p_real['unRealizedProfit'])
-                roe = (pnl / (entry * qty / LEVERAGE)) * 100 if entry > 0 else 0
+                roe = (pnl / (max(0.01, entry * qty / LEVERAGE))) * 100 if entry > 0 else 0
                 
                 # Tentar pegar TP/SL das ordens abertas ou do banco de dados
                 sl = 0
