@@ -909,7 +909,7 @@ function renderPositions(pos){
         <td>${p.score||0}</td>
       </tr>`;
     }).join('');
-  document.getElementById('pos-table').innerHTML=pos.length===0?'<tr><td colspan="8" class="empty">Nenhuma posição aberta</td></tr>':
+  document.getElementById('pos-table').innerHTML=pos.length===0?'<tr><td colspan="9" class="empty">Nenhuma posição aberta</td></tr>':
     pos.map(p=>{
       const pC=(p.pnl||0)>=0?'g':'r';
       const sC=p.side==='UP'?'tag-up':'tag-dn';
@@ -922,6 +922,7 @@ function renderPositions(pos){
         <td class="g">$${(p.take_profit||0).toFixed(4)}</td>
         <td class="r">$${(p.stop_loss||0).toFixed(4)}</td>
         <td>${(p.ai_confidence||0).toFixed(0)}%</td>
+        <td>${p.score||0}</td>
       </tr>`;
     }).join('');
   document.getElementById('pos-full').innerHTML=rows;
