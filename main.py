@@ -817,107 +817,40 @@ def manage_positions():
     global positions, daily_loss
     to_remove = []
     with lock:
-        positions_copy = dict(positions)
-    
-    try:
-        binance_positions = safe_req(client.futures_position_information)
-        active_symbols = {p['symbol']: abs(float(p['positionAmt'])) for p in binance_positions if float(p['positionAmt']) != 0}
-    except:
-        active_symbols = {s: pos['qty'] for s, pos in positions_copy.items()}
-
-    for symbol, pos in positions_copy.items():
-        if symbol not in active_symbols:
-            # Se a posição sumiu da Binance, ela foi stopada ou fechada manualmente
-            log(f"🧹 Posição {symbol} encerrada na exchange. Sincronizando...", level='info')
-            # Tentar recuperar o PnL do último trade para o histórico
-            try:
-                trades = safe_req(client.futures_account_trades, symbol=symbol, limit=5)
-                last_trade = trades[-1]
-                real_pnl = float(last_trade.get('realizedPnl', 0))
-                # Se o PnL for negativo, adiciona à perda diária
-                if real_pnl < 0:
-                    daily_loss += abs(real_pnl)
-                
-                save_trade({
-                    "symbol": symbol, "side": pos['side'], "entry_price": pos['entry'], 
-                    "exit_price": float(last_trade.get('price', 0)),
-                    "quantity": pos['qty'], "pnl": real_pnl, 
-                    "pnl_pct": (real_pnl / (pos['entry'] * pos['qty'] / LEVERAGE)) * 100 if pos['entry'] > 0 else 0,
-                    "entry_time": pos["entry_time"], "exit_time": datetime.now().isoformat(),
-                    "reason": "exchange_event", "risk_used": pos.get("risk_used", 0.03),
-                    "ai_confidence": pos.get("ai_confidence", 0), "score": pos.get("score", 0)
-                })
-            except: pass
-            to_remove.append(symbol)
-            delete_position(symbol)
-            continue
-
-        try:
+        for symbol, pos in list(positions.items()):
+            side = pos["side"]; entry = pos["entry"]; qty = pos["qty"]
+            sl = pos["stop_loss"]; tp = pos["take_profit"]
             price = get_price(symbol)
             if not price: continue
-            
-            entry = pos["entry"]; qty = pos["qty"]; side = pos["side"]
-            sl = pos.get("stop_loss", 0); tp = pos.get("take_profit", 0)
-            
-            # Atualizar máximos/mínimos para Trailing
-            if side == "UP":
-                if price > pos.get("highest_price", entry):
-                    with lock: 
-                        if symbol in positions: positions[symbol]["highest_price"] = price
-            else:
-                if price < pos.get("lowest_price", entry):
-                    with lock:
-                        if symbol in positions: positions[symbol]["lowest_price"] = price
-            
-            pnl_pct = ((price - entry) / entry * 100) if side == "UP" else ((entry - price) / entry * 100)
-            
-            # Trailing Stop Dinâmico (Proteção de Lucro)
-            # Se lucro > 0.5%, ativa trailing de 0.3% do topo
-            close = False
-            reason = ""
-            
-            if pnl_pct > 0.5:
-                if not pos.get("trailing_activated"):
-                    with lock:
-                        if symbol in positions: positions[symbol]["trailing_activated"] = 1
-                
-                trail_price = pos.get("highest_price", entry) * 0.997 if side == "UP" else pos.get("lowest_price", entry) * 1.003
+            if side == "UP": pos["highest_price"] = max(pos.get("highest_price", entry), price)
+            else: pos["lowest_price"] = min(pos.get("lowest_price", entry), price)
+            pnl_pct = (price - entry) / entry if side == "UP" else (entry - price) / entry
+            close = False; reason = ""
+            if pnl_pct > 0.012 and not pos.get('trailing_activated'):
+                pos['trailing_activated'] = 1
+                log(f"🛡️ Trailing Stop ativado para {symbol}", level='info')
+            if pos.get('trailing_activated'):
+                trail_price = pos.get("highest_price") * 0.997 if side == "UP" else pos.get("lowest_price") * 1.003
                 if (side == "UP" and price < trail_price) or (side == "DOWN" and price > trail_price):
                     close = True; reason = "trailing_stop"
-            
-            # TP / SL Virtual (Backup do Real)
             if not close:
-                
-            # Trava de Lucro Mínimo: Só fecha no TP se o lucro for > 1.5x o risco inicial
-            # ou se o sinal técnico inverter completamente.
-            is_tp = (side == "UP" and price >= tp) or (side == "DOWN" and price <= tp)
-            if is_tp:
-                # Se atingiu o TP real, fecha sem dó
-                close = True
-                reason = "take_profit"
-
-                elif (side == "UP" and price <= sl) or (side == "DOWN" and price >= sl):
+                is_tp = (side == "UP" and price >= tp) or (side == "DOWN" and price <= tp)
+                is_sl = (side == "UP" and price <= sl) or (side == "DOWN" and price >= sl)
+                if is_tp:
+                    close = True; reason = "take_profit"
+                elif is_sl:
                     close = True; reason = "stop_loss"
-
-            
             if close:
                 cs_ = "SELL" if side == "UP" else "BUY"
                 log(f"🚨 FECHAMENTO FORÇADO PELO BOT: {symbol} por {reason} | Preço: {price}", level='risk')
                 try:
-                    # Tenta cancelar ordens existentes primeiro
                     try: safe_req(client.futures_cancel_all_open_orders, symbol=symbol)
                     except: pass
-                    
-                    # Ordem de mercado para fechar tudo
                     order = safe_req(client.futures_create_order, symbol=symbol, side=cs_, type="MARKET", quantity=qty, reduceOnly=True)
                     final_price = float(order.get('avgPrice', 0)) or float(order.get('price', 0)) or price
                     real_pnl = (final_price - entry) * qty if side == "UP" else (entry - final_price) * qty
-                    
                     log(f"🏁 Posição {symbol} encerrada com sucesso via Bot Monitor. PnL: ${real_pnl:.2f}", level='success')
-                    
-                    if real_pnl < 0:
-                        daily_loss += abs(real_pnl)
-                    
+                    if real_pnl < 0: daily_loss += abs(real_pnl)
                     save_trade({
                         "symbol": symbol, "side": side, "entry_price": entry, "exit_price": final_price,
                         "quantity": qty, "pnl": real_pnl, "pnl_pct": pnl_pct,
@@ -925,23 +858,12 @@ def manage_positions():
                         "reason": f"bot_{reason}", "risk_used": pos.get("risk_used", 0.03),
                         "ai_confidence": pos.get("ai_confidence", 0), "score": pos.get("score", 0)
                     })
-                    to_remove.append(symbol)
-                    delete_position(symbol)
+                    to_remove.append(symbol); delete_position(symbol)
                 except Exception as e:
-                    log(f"❌ FALHA CRÍTICA ao fechar {symbol} via Bot Monitor: {e}. Tentando novamente em 1s...", level='error')
-
-                except Exception as e:
-                    log(f"❌ Erro ao fechar {symbol}: {e}", level='error')
-                    
-        except Exception as e:
-            log(f"Erro manage {symbol}: {e}", level='error')
-            
-    if to_remove:
-        with lock:
-            for s in to_remove: positions.pop(s, None)
-
-
-
+                    log(f"❌ FALHA CRÍTICA ao fechar {symbol}: {e}", level='error')
+    with lock:
+        for s in to_remove:
+            if s in positions: del positions[s]
 def find_candidates():
     global scanner_data
     try:
