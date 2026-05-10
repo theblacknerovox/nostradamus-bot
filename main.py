@@ -909,6 +909,62 @@ def find_candidates():
 # ==================== BOT LOOP v4.2 - SEM DEADLOCK ====================
 
 
+
+# ==================== INSTITUTIONAL LOGIC ====================
+def detect_market_regime(df):
+    if df.empty or len(df) < 50: return "UNKNOWN", 0.0
+    try:
+        adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
+        ema20 = ta.trend.ema_indicator(df['close'], window=20).iloc[-1]
+        ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
+        price = df['close'].iloc[-1]
+        if adx > 25:
+            if price > ema20 > ema50: return "STRONG_TREND_UP", adx/100
+            if price < ema20 < ema50: return "STRONG_TREND_DOWN", adx/100
+            return "TRENDING", adx/100
+        elif adx < 20: return "CHOP_RANGE", (25-adx)/25
+        return "NEUTRAL", 0.5
+    except: return "NEUTRAL", 0.5
+
+def get_mtf_confluence(symbol):
+    timeframes = ["1h", "4h", "1d"]
+    scores = []
+    for tf in timeframes:
+        try:
+            df = get_candles(symbol, tf, limit=50)
+            if df.empty: continue
+            regime, conf = detect_market_regime(df)
+            if regime == "STRONG_TREND_UP": scores.append(1)
+            elif regime == "STRONG_TREND_DOWN": scores.append(-1)
+            else: scores.append(0)
+        except: continue
+    total_score = sum(scores)
+    if total_score >= 2: return "UP"
+    if total_score <= -2: return "DOWN"
+    return "NEUTRAL"
+
+class DrawdownManager:
+    def __init__(self):
+        self.levels = [0.03, 0.05, 0.08, 0.12, 0.15]
+        self.risk_multipliers = [0.5, 0.3, 0.1, 0.0, 0.0]
+    def get_risk_multiplier(self, current_dd):
+        for i, level in enumerate(self.levels): 
+            if current_dd >= level: return self.risk_multipliers[i]
+        return 1.0
+
+def should_operate_equity_filter():
+    try:
+        with get_db() as conn:
+            history = conn.execute("SELECT pnl FROM trade_history ORDER BY id DESC LIMIT 5").fetchall()
+            if len(history) < 3: return True
+            pnls = [r[0] for r in history]
+            if all(p < 0 for p in pnls[:3]): return False
+            return True
+    except: return True
+
+drawdown_manager = DrawdownManager()
+# =============================================================
+
 def bot_loop():
     global bot_on, daily_loss, positions, start_balance, last_reset_day
     log("🚀 Nostradamus v4.3 INSTITUCIONAL iniciado!", level='success')
