@@ -1023,7 +1023,7 @@ def bot_loop():
                         if signal:
                             # CONFLUÊNCIA MULTI-TIMEFRAME (INSTITUCIONAL)
                             mtf_dir = get_mtf_confluence(sym)
-                            if mtf_dir != signal["direction"]:
+                            if mtf_dir != signal["signal"]:
                                 log(f"🚫 MTF Discorda: {sym} (Signal:{signal['direction']} | MTF:{mtf_dir})", level='reject')
                                 continue
                             
@@ -1036,8 +1036,8 @@ def bot_loop():
                             
                             if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained: continue
                             
-                            log(f"💰 SINAL INSTITUCIONAL: {sym} {signal['direction']} | IA:{ai_conf:.0f}%", level='trade')
-                            sym_to_trade = sym; side_to_trade = signal["direction"]
+                            log(f"💰 SINAL INSTITUCIONAL: {sym} {signal['signal']} | IA:{ai_conf:.0f}%", level='trade')
+                            sym_to_trade = sym; side_to_trade = signal["signal"]
                             score_to_trade = signal; ai_conf_to_trade = ai_conf
                             break
             
