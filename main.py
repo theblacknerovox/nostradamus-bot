@@ -921,6 +921,27 @@ def bot_loop():
     last_reset_day = load_state("last_reset_day", "")
     
     while bot_on:
+            # FILTROS INSTITUCIONAIS
+            if not should_operate_equity_filter():
+                log("🛡️ Equity Curve Filter: Pausando operações por sequência de perdas.", level='warning')
+                time.sleep(300)
+                continue
+
+            # Verificação de Drawdown
+            current_bal = get_balance()
+            peak = load_state("peak_balance", start_balance)
+            if current_bal > peak:
+                peak = current_bal
+                save_state("peak_balance", peak)
+            
+            drawdown = (peak - current_bal) / peak if peak > 0 else 0
+            risk_mult = drawdown_manager.get_risk_multiplier(drawdown)
+            
+            if risk_mult == 0:
+                log(f"🚨 Drawdown Crítico ({drawdown:.1%}): Operações suspensas.", level='risk')
+                time.sleep(3600)
+                continue
+
         try:
             bal = get_balance()
             if bal <= 0:
@@ -968,6 +989,11 @@ def bot_loop():
                         df = get_candles(sym, "5m")
                         if df.empty or len(df) < 60: continue
                         signal = hybrid_entry_signal(df)
+                        if signal:
+                            mtf_dir = get_mtf_confluence(sym)
+                            if mtf_dir != signal["direction"]:
+                                log(f"🚫 MTF Discorda: {sym} (Signal:{signal['direction']} | MTF:{mtf_dir})", level='reject')
+                                signal = None
                         if not signal: continue
                         
                         sd = {"score": signal["score"], "direction": signal["signal"], "signals": signal.get("signals", {})}
