@@ -990,6 +990,19 @@ def bot_loop():
     last_train = time.time()
     
     while bot_on:
+            # RESET DIÁRIO AUTOMÁTICO
+            global last_reset_day
+            current_day = datetime.now().strftime("%Y-%m-%d")
+            if last_reset_day != current_day:
+                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário.", level='info')
+                daily_loss = 0.0
+                last_reset_day = current_day
+                save_state("daily_loss", 0.0)
+                save_state("last_reset_day", current_day)
+                # Atualizar saldo inicial para o novo dia
+                start_balance = bal
+                save_state("start_balance", start_balance)
+
         try:
             bal = get_balance()
             if bal <= 0:
@@ -1103,6 +1116,7 @@ class Auth:
 bot_on = load_state("bot_on", False)
 positions = load_positions()
 daily_loss = load_state("daily_loss", 0.0)
+last_reset_day = load_state("last_reset_day", "")
 start_balance = load_state("start_balance", 0.0)
 
 
