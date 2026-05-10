@@ -931,11 +931,13 @@ def bot_loop():
             # RESET DIÁRIO AUTOMÁTICO
             current_day = datetime.now().strftime("%Y-%m-%d")
             if last_reset_day != current_day:
-                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário.", level='info')
+                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário e reativando bot.", level='info')
                 daily_loss = 0.0
                 last_reset_day = current_day
+                bot_on = True # REATIVAÇÃO AUTOMÁTICA
                 save_state("daily_loss", 0.0)
                 save_state("last_reset_day", current_day)
+                save_state("bot_on", True)
                 start_balance = bal
                 save_state("start_balance", start_balance)
 
