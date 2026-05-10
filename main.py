@@ -978,8 +978,9 @@ def find_candidates():
         return []
 
 # ==================== BOT LOOP v4.2 - SEM DEADLOCK ====================
+
 def bot_loop():
-    global bot_on, daily_loss, positions, start_balance
+    global bot_on, daily_loss, positions, start_balance, last_reset_day
     log("🚀 Nostradamus v4.2 iniciado! Ichimoku+VWAP+Fibonacci+IA", level='success')
     sync_positions()
     start_balance = get_balance()
@@ -988,31 +989,9 @@ def bot_loop():
     risk_manager.peak_balance = start_balance
     last_sync = time.time()
     last_train = time.time()
+    last_reset_day = load_state("last_reset_day", "")
     
     while bot_on:
-            # RESET DIÁRIO AUTOMÁTICO
-            global last_reset_day
-            current_day = datetime.now().strftime("%Y-%m-%d")
-            if last_reset_day != current_day:
-                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário.", level='info')
-                daily_loss = 0.0
-                last_reset_day = current_day
-                save_state("daily_loss", 0.0)
-                save_state("last_reset_day", current_day)
-                start_balance = get_balance()
-                save_state("start_balance", start_balance)
-            global last_reset_day
-            current_day = datetime.now().strftime("%Y-%m-%d")
-            if last_reset_day != current_day:
-                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário.", level='info')
-                daily_loss = 0.0
-                last_reset_day = current_day
-                save_state("daily_loss", 0.0)
-                save_state("last_reset_day", current_day)
-                # Atualizar saldo inicial para o novo dia
-                start_balance = bal
-                save_state("start_balance", start_balance)
-
         try:
             bal = get_balance()
             if bal <= 0:
@@ -1020,6 +999,17 @@ def bot_loop():
                 bot_on = False
                 break
             
+            # RESET DIÁRIO AUTOMÁTICO
+            current_day = datetime.now().strftime("%Y-%m-%d")
+            if last_reset_day != current_day:
+                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário.", level='info')
+                daily_loss = 0.0
+                last_reset_day = current_day
+                save_state("daily_loss", 0.0)
+                save_state("last_reset_day", current_day)
+                start_balance = bal
+                save_state("start_balance", start_balance)
+
             risk_manager.update_peak(bal)
             
             if daily_loss > start_balance * DAILY_LOSS_LIMIT:
@@ -1035,7 +1025,6 @@ def bot_loop():
                 threading.Thread(target=ai_engine.train, daemon=True).start()
                 last_train = time.time()
             
-            # ENCONTRA SINAL DENTRO DO LOCK
             sym_to_trade = None
             side_to_trade = None
             score_to_trade = None
@@ -1044,18 +1033,15 @@ def bot_loop():
             with lock:
                 if len(positions) < MAX_TRADES:
                     for sym in find_candidates():
-                        if sym in positions:
-                            continue
+                        if sym in positions: continue
                         df = get_candles(sym, "5m")
-                        if df.empty or len(df) < 60:
-                            continue
+                        if df.empty or len(df) < 60: continue
                         signal = hybrid_entry_signal(df)
-                        if not signal:
-                            continue
+                        if not signal: continue
                         
                         sd = {"score": signal["score"], "direction": signal["signal"], "signals": signal.get("signals", {})}
                         features = ai_engine.extract_features(df)
-                        ai_conf = 50.0
+                        ai_conf = 55.0
                         ai_dir = "uncertain"
                         
                         if features and ai_engine.trained:
@@ -1065,28 +1051,20 @@ def bot_loop():
                             if ai_dir != tech_dir and ai_conf > 65:
                                 log(f"🧠 IA discorda: {sym}", level='ai')
                                 continue
-                        elif features:
-                            ai_conf = 55.0
                         
                         if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained:
                             log(f"🧠 IA baixa: {sym} {ai_conf:.0f}%", level='ai')
                             continue
                         
                         log(f"💰 SINAL v4.2: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%", level='trade')
-                        
-                        sym_to_trade = sym
-                        side_to_trade = sd["direction"]
-                        score_to_trade = sd
-                        ai_conf_to_trade = ai_conf
-                        break  # Sai do for e do lock
+                        sym_to_trade = sym; side_to_trade = sd["direction"]; score_to_trade = sd; ai_conf_to_trade = ai_conf
+                        break
             
-            # EXECUTA O TRADE FORA DO LOCK
             if sym_to_trade:
-                # [INSTITUCIONAL] Verificação de Liquidez antes da execução
-                if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0): # 1.0 é placeholder, o execute_trade calcula o real
+                if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0):
                     execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
                 else:
-                    log(f"🚫 Trade cancelado por falta de liquidez institucional: {sym_to_trade}", level='reject')
+                    log(f"🚫 Trade cancelado por falta de liquidez: {sym_to_trade}", level='reject')
                 
             manage_positions()
             save_state("daily_loss", daily_loss)
@@ -1095,6 +1073,7 @@ def bot_loop():
             log(f"Erro loop: {e}", level='error')
         
         time.sleep(INTERVAL)
+
 
 # ==================== AUTH ====================
 JWT_SECRET = os.getenv("JWT_SECRET", "nostradamus-v4")
