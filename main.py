@@ -1024,14 +1024,14 @@ def bot_loop():
                             # CONFLUÊNCIA MULTI-TIMEFRAME (INSTITUCIONAL)
                             mtf_dir = get_mtf_confluence(sym)
                             if mtf_dir != signal["signal"]:
-                                log(f"🚫 MTF Discorda: {sym} (Signal:{signal['direction']} | MTF:{mtf_dir})", level='reject')
+                                log(f"🚫 MTF Discorda: {sym} (Signal:{signal['signal']} | MTF:{mtf_dir})", level='reject')
                                 continue
                             
                             features = ai_engine.extract_features(df)
                             ai_conf = 55.0; ai_dir = "uncertain"
                             if features and ai_engine.trained:
                                 ai_conf, ai_dir = ai_engine.predict(features)
-                                tech_dir = "bull" if signal["direction"] == "UP" else "bear"
+                                tech_dir = "bull" if signal["signal"] == "UP" else "bear"
                                 if ai_dir != tech_dir and ai_conf > 65: continue
                             
                             if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained: continue
