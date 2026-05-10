@@ -39,7 +39,7 @@ def log(msg, level='info'):
     else: logger.info(m)
 
 # ==================== CONFIG ====================
-LEVERAGE=20; RISK=0.03; RR=2.0; MAX_TRADES=1; DAILY_LOSS_LIMIT=0.05
+LEVERAGE=20; RISK=0.03; RR=3.0; MAX_TRADES=1; DAILY_LOSS_LIMIT=0.05
 INTERVAL=10; RISK_MAX=0.05; RISK_MIN=0.02; MIN_BACKTEST_CONFIDENCE=20.0
 PROTECT_CAPITAL=True; MAX_PRICE=20.0; AI_MIN_CONFIDENCE=40.0
 PARTIAL_TP_ENABLED=True; PYRAMID_ENABLED=True
@@ -720,7 +720,7 @@ def execute_trade(symbol, side, score_data, ai_conf):
         dynamic_risk = risk_manager.get_risk(bal, ai_conf)
         
         # Gerenciamento de Risco Profissional: SL curto, TP longo
-        risk_dist = max(atr_v * 1.2, price * 0.004) 
+        risk_dist = max(atr_v * 1.0, price * 0.0035) 
         reward_dist = risk_dist * RR 
 
         if side == "UP":
@@ -887,8 +887,15 @@ def manage_positions():
             
             # TP / SL Virtual (Backup do Real)
             if not close:
-                if (side == "UP" and price >= tp) or (side == "DOWN" and price <= tp):
-                    close = True; reason = "take_profit"
+                
+            # Trava de Lucro Mínimo: Só fecha no TP se o lucro for > 1.5x o risco inicial
+            # ou se o sinal técnico inverter completamente.
+            is_tp = (side == "UP" and price >= tp) or (side == "DOWN" and price <= tp)
+            if is_tp:
+                # Se atingiu o TP real, fecha sem dó
+                close = True
+                reason = "take_profit"
+
                 elif (side == "UP" and price <= sl) or (side == "DOWN" and price >= sl):
                     close = True; reason = "stop_loss"
 
