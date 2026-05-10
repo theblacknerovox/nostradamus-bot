@@ -908,79 +908,53 @@ def find_candidates():
 
 # ==================== BOT LOOP v4.2 - SEM DEADLOCK ====================
 
+
 def bot_loop():
     global bot_on, daily_loss, positions, start_balance, last_reset_day
-    log("🚀 Nostradamus v4.2 iniciado! Ichimoku+VWAP+Fibonacci+IA", level='success')
+    log("🚀 Nostradamus v4.3 INSTITUCIONAL iniciado!", level='success')
     sync_positions()
     start_balance = get_balance()
     save_state("start_balance", start_balance)
-    risk_manager.initial_balance = start_balance
-    risk_manager.peak_balance = start_balance
     last_sync = time.time()
     last_train = time.time()
     last_reset_day = load_state("last_reset_day", "")
     
     while bot_on:
-            # FILTROS INSTITUCIONAIS
+        try:
+            # 1. FILTROS INSTITUCIONAIS DE SEGURANÇA
             if not should_operate_equity_filter():
-                log("🛡️ Equity Curve Filter: Pausando operações por sequência de perdas.", level='warning')
-                time.sleep(300)
-                continue
+                log("🛡️ Equity Curve Filter: Pausando por sequência de perdas.", level='warning')
+                time.sleep(300); continue
 
-            # Verificação de Drawdown
             current_bal = get_balance()
             peak = load_state("peak_balance", start_balance)
             if current_bal > peak:
-                peak = current_bal
-                save_state("peak_balance", peak)
+                peak = current_bal; save_state("peak_balance", peak)
             
             drawdown = (peak - current_bal) / peak if peak > 0 else 0
             risk_mult = drawdown_manager.get_risk_multiplier(drawdown)
-            
             if risk_mult == 0:
-                log(f"🚨 Drawdown Crítico ({drawdown:.1%}): Operações suspensas.", level='risk')
-                time.sleep(3600)
-                continue
+                log(f"🚨 Drawdown Crítico ({drawdown:.1%}): Suspenso.", level='risk')
+                time.sleep(3600); continue
 
-        try:
-            bal = get_balance()
-            if bal <= 0:
-                log("Saldo zerado!", level='risk')
-                bot_on = False
-                break
-            
-            # RESET DIÁRIO AUTOMÁTICO
+            # 2. RESET DIÁRIO
             current_day = datetime.now().strftime("%Y-%m-%d")
             if last_reset_day != current_day:
-                log(f"🌅 Novo dia detectado ({current_day}). Resetando limite diário e reativando bot.", level='info')
-                daily_loss = 0.0
-                last_reset_day = current_day
-                bot_on = True # REATIVAÇÃO AUTOMÁTICA
-                save_state("daily_loss", 0.0)
-                save_state("last_reset_day", current_day)
-                save_state("bot_on", True)
-                start_balance = bal
+                log(f"🌅 Novo dia ({current_day}). Resetando limites.", level='info')
+                daily_loss = 0.0; last_reset_day = current_day; bot_on = True
+                save_state("daily_loss", 0.0); save_state("last_reset_day", current_day)
+                save_state("bot_on", True); start_balance = current_bal
                 save_state("start_balance", start_balance)
 
-            risk_manager.update_peak(bal)
-            
             if daily_loss > start_balance * DAILY_LOSS_LIMIT:
                 log(f"Stop diário! ${daily_loss:.2f}", level='risk')
-                bot_on = False
-                break
+                bot_on = False; break
             
             if time.time() - last_sync > 300:
-                sync_positions()
-                last_sync = time.time()
+                sync_positions(); last_sync = time.time()
             
-            if time.time() - last_train > 3600:
-                threading.Thread(target=ai_engine.train, daemon=True).start()
-                last_train = time.time()
-            
-            sym_to_trade = None
-            side_to_trade = None
-            score_to_trade = None
-            ai_conf_to_trade = None
+            # 3. PROCURA DE SINAIS COM CONFLUÊNCIA MTF
+            sym_to_trade = None; side_to_trade = None; score_to_trade = None; ai_conf_to_trade = None
             
             with lock:
                 if len(positions) < MAX_TRADES:
@@ -988,48 +962,40 @@ def bot_loop():
                         if sym in positions: continue
                         df = get_candles(sym, "5m")
                         if df.empty or len(df) < 60: continue
+                        
                         signal = hybrid_entry_signal(df)
                         if signal:
+                            # CONFLUÊNCIA MULTI-TIMEFRAME (INSTITUCIONAL)
                             mtf_dir = get_mtf_confluence(sym)
                             if mtf_dir != signal["direction"]:
                                 log(f"🚫 MTF Discorda: {sym} (Signal:{signal['direction']} | MTF:{mtf_dir})", level='reject')
-                                signal = None
-                        if not signal: continue
-                        
-                        sd = {"score": signal["score"], "direction": signal["signal"], "signals": signal.get("signals", {})}
-                        features = ai_engine.extract_features(df)
-                        ai_conf = 55.0
-                        ai_dir = "uncertain"
-                        
-                        if features and ai_engine.trained:
-                            ai_conf, ai_dir = ai_engine.predict(features)
-                            log(f"🧠 IA: {sym} → {ai_dir} ({ai_conf:.0f}%)", level='ai')
-                            tech_dir = "bull" if sd["direction"] == "UP" else "bear"
-                            if ai_dir != tech_dir and ai_conf > 65:
-                                log(f"🧠 IA discorda: {sym}", level='ai')
                                 continue
-                        
-                        if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained:
-                            log(f"🧠 IA baixa: {sym} {ai_conf:.0f}%", level='ai')
-                            continue
-                        
-                        log(f"💰 SINAL v4.2: {sym} {sd['direction']} | Score:{sd['score']} | IA:{ai_conf:.0f}%", level='trade')
-                        sym_to_trade = sym; side_to_trade = sd["direction"]; score_to_trade = sd; ai_conf_to_trade = ai_conf
-                        break
+                            
+                            features = ai_engine.extract_features(df)
+                            ai_conf = 55.0; ai_dir = "uncertain"
+                            if features and ai_engine.trained:
+                                ai_conf, ai_dir = ai_engine.predict(features)
+                                tech_dir = "bull" if signal["direction"] == "UP" else "bear"
+                                if ai_dir != tech_dir and ai_conf > 65: continue
+                            
+                            if ai_conf < AI_MIN_CONFIDENCE and ai_engine.trained: continue
+                            
+                            log(f"💰 SINAL INSTITUCIONAL: {sym} {signal['direction']} | IA:{ai_conf:.0f}%", level='trade')
+                            sym_to_trade = sym; side_to_trade = signal["direction"]
+                            score_to_trade = signal; ai_conf_to_trade = ai_conf
+                            break
             
             if sym_to_trade:
                 if check_order_book_liquidity(sym_to_trade, side_to_trade, 1.0):
                     execute_trade(sym_to_trade, side_to_trade, score_to_trade, ai_conf_to_trade)
-                else:
-                    log(f"🚫 Trade cancelado por falta de liquidez: {sym_to_trade}", level='reject')
                 
             manage_positions()
             save_state("daily_loss", daily_loss)
             
         except Exception as e:
             log(f"Erro loop: {e}", level='error')
-        
         time.sleep(INTERVAL)
+
 
 
 # ==================== AUTH ====================
